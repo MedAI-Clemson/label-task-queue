@@ -6,18 +6,8 @@ from sqlmodel import Session, select
 from typing import List
 
 from database import create_db_and_tables, get_session
-from models import Taskset, TasksetCreate, TasksetReadWithProjects, TasksetUpdate
-from models import (
-    Project,
-    ProjectCreate,
-    ProjectReadWithTasksetsAndUsers,
-    ProjectUpdate,
-)
-from models import User, UserCreate, UserReadWithProjects, UserUpdate
+from models import *
 
-
-##
-## Routes
 app = FastAPI()
 
 
@@ -26,23 +16,147 @@ def on_startup():
     create_db_and_tables()
 
 
-@app.post("/tasksets/", response_model=TasksetReadWithProjects, tags=["Taskset"])
+#
+# Items
+#
+
+
+@app.get("/items/{item_id}", response_model=ItemReadWithDataset, tags=["Item"])
+def get_item(*, session: Session = Depends(get_session), item_id):
+    item = session.get(Item, item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+    return item
+
+
+@app.patch("/items/{item_id}", response_model=ItemReadWithDataset, tags=["Item"])
+def update_item(
+    *, session: Session = Depends(get_session), item_id: int, item: ItemUpdate
+):
+    db_item = session.get(Item, item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+
+    item_dict = item.dict(exclude_unset=True)
+    for k, v in item_dict.items():
+        setattr(db_item, k, v)
+    session.add(db_item)
+    session.commit()
+    session.refresh(db_item)
+    return db_item
+
+
+@app.delete("/items/{item_id}", tags=["Item"])
+def delete_item(*, session: Session = Depends(get_session), item_id: int):
+    # TODO: delete item data file as well
+    item = session.get(Item, item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+    session.delete(item)
+    session.commit()
+    return {"ok": True}
+
+
+#
+# Datasets
+#
+@app.post("/datasets/", response_model=DatasetReadWithRelations, tags=["Dataset"])
+def create_dataset(*, session: Session = Depends(get_session), dataset: DatasetCreate):
+    db_dataset = Dataset.from_orm(dataset)
+    session.add(db_dataset)
+    session.commit()
+    session.refresh(db_dataset)
+    return db_dataset
+
+
+@app.get("/datasets/", response_model=List[DatasetReadWithRelations], tags=["Dataset"])
+def get_datasets(*, session: Session = Depends(get_session)):
+    datasets = session.exec(select(Dataset)).all()
+    return datasets
+
+
+@app.get(
+    "/datasets/{dataset_id}", response_model=DatasetReadWithRelations, tags=["Dataset"]
+)
+def get_dataset(*, session: Session = Depends(get_session), dataset_id):
+    dataset = session.get(Dataset, dataset_id)
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    return dataset
+
+
+@app.post("/dataset/{dataset_id}/items/", tags=["Dataset"])
+def create_items(
+    *, session: Session = Depends(get_session), dataset_id, items: List[ItemCreate]
+):
+    dataset = session.get(Dataset, dataset_id)
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    db_items = []
+    for item in items:
+        it = Item.from_orm(item)
+        it.dataset_id = dataset_id
+        db_items.append(it)
+    session.add_all(db_items)
+    session.commit()
+
+    return {"ok": True}
+
+
+@app.patch(
+    "/datasets/{dataset_id}", response_model=DatasetReadWithRelations, tags=["Dataset"]
+)
+def update_dataset(
+    *, session: Session = Depends(get_session), dataset_id: int, dataset: DatasetUpdate
+):
+    db_dataset = session.get(Dataset, dataset_id)
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    dataset_dict = dataset.dict(exclude_unset=True)
+    for k, v in dataset_dict.items():
+        setattr(db_dataset, k, v)
+    session.add(db_dataset)
+    session.commit()
+    session.refresh(db_dataset)
+    return db_dataset
+
+
+@app.delete("/datasets/{dataset_id}", tags=["Dataset"])
+def delete_dataset(*, session: Session = Depends(get_session), dataset_id: int):
+    # TODO: delete dataset data file as well
+    dataset = session.get(Dataset, dataset_id)
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    session.delete(dataset)
+    session.commit()
+    return {"ok": True}
+
+
+#
+# Tasksets
+#
+@app.post("/tasksets/", response_model=TasksetReadWithRelations, tags=["Taskset"])
 def create_taskset(*, session: Session = Depends(get_session), taskset: TasksetCreate):
     db_taskset = Taskset.from_orm(taskset)
+    # TODO: make sure provided dataset exists
+    if not session.get(Dataset, db_taskset.dataset_id):
+        raise HTTPException(status_code=404, detail="Dataset not found")
     session.add(db_taskset)
     session.commit()
     session.refresh(db_taskset)
     return db_taskset
 
 
-@app.get("/tasksets/", response_model=List[TasksetReadWithProjects], tags=["Taskset"])
+@app.get("/tasksets/", response_model=List[TasksetReadWithRelations], tags=["Taskset"])
 def get_tasksets(*, session: Session = Depends(get_session)):
     tasksets = session.exec(select(Taskset)).all()
     return tasksets
 
 
 @app.get(
-    "/tasksets/{taskset_id}", response_model=TasksetReadWithProjects, tags=["Taskset"]
+    "/tasksets/{taskset_id}", response_model=TasksetReadWithRelations, tags=["Taskset"]
 )
 def get_taskset(*, session: Session = Depends(get_session), taskset_id):
     taskset = session.get(Taskset, taskset_id)
@@ -52,7 +166,7 @@ def get_taskset(*, session: Session = Depends(get_session), taskset_id):
 
 
 @app.patch(
-    "/tasksets/{taskset_id}", response_model=TasksetReadWithProjects, tags=["Taskset"]
+    "/tasksets/{taskset_id}", response_model=TasksetReadWithRelations, tags=["Taskset"]
 )
 def update_taskset(
     *, session: Session = Depends(get_session), taskset_id: int, taskset: TasksetUpdate
@@ -81,94 +195,9 @@ def delete_taskset(*, session: Session = Depends(get_session), taskset_id: int):
     return {"ok": True}
 
 
-# Tasksets
-@app.post("/tasksets/{taskset_id}/data", tags=["Taskset"])
-def upload_data_to_taskset(
-    *,
-    session: Session = Depends(get_session),
-    taskset_id: int,
-    file: UploadFile = File(...),
-):
-    # TODO: add file object abstraction in order to store metadata like media type and filename
-    # TODO: add upload file validation
-    # TODO: return computed data summary statistics
-
-    taskset = session.get(Taskset, taskset_id)
-    if not taskset:
-        raise HTTPException(status_code=404, detail="Taskset not found")
-    if taskset.data_file:
-        raise HTTPException(
-            400,
-            "Taskset already has an attached datafile. First delete the current data.",
-        )
-
-    # load and save the file
-    dir = f"data/tasksets/{taskset_id}"
-    filename = f"{dir}/{file.filename}"
-    try:
-        if not os.path.exists(dir):
-            os.makedirs(dir)
-
-        with open(filename, "wb") as f:
-            while contents := file.file.read(1024 * 1024):
-                f.write(contents)
-    except Exception as e:
-        raise HTTPException(500, repr(e))
-
-    # update the taskset record to include file path
-    taskset.data_file = filename
-    session.add(taskset)
-    session.commit()
-    session.refresh(taskset)
-
-    return {"message": f"Successfully uploaded {file.filename} {file.headers}"}
-
-
-# Tasksets
-@app.get("/tasksets/{taskset_id}/data", response_class=FileResponse, tags=["Taskset"])
-def download_data_from_taskset(
-    *, session: Session = Depends(get_session), taskset_id: int
-):
-    taskset = session.get(Taskset, taskset_id)
-    if not taskset:
-        raise HTTPException(status_code=404, detail="Taskset not found")
-    if not taskset.data_file:
-        raise HTTPException(
-            status_code=404, detail="Taskset does not have a data file."
-        )
-
-    return FileResponse(taskset.data_file)
-
-
-# Tasksets
-@app.delete("/tasksets/{taskset_id}/data", tags=["Taskset"])
-def delete_data_from_taskset(
-    *, session: Session = Depends(get_session), taskset_id: int
-):
-    taskset = session.get(Taskset, taskset_id)
-    if not taskset:
-        raise HTTPException(status_code=404, detail="Taskset not found")
-    if not taskset.data_file:
-        raise HTTPException(
-            status_code=404, detail="Taskset does not have a data file."
-        )
-
-    try:
-        os.remove(taskset.data_file)
-    except Exception as e:
-        raise HTTPException(
-            status_code=500, detail=f"Unable to delete data from taskset. {repr(e)}"
-        )
-
-    taskset.data_file = None
-    session.add(taskset)
-    session.commit()
-    session.refresh(taskset)
-
-    return {"ok": True}
-
-
+#
 # Users
+#
 @app.post("/users/", response_model=UserReadWithProjects, tags=["User"])
 def create_user(*, session: Session = Depends(get_session), user: UserCreate):
     db_user = User.from_orm(user)
@@ -222,10 +251,10 @@ def delete_user(*, session: Session = Depends(get_session), user_id: int):
     return {"ok": True}
 
 
+#
 # Projects
-@app.post(
-    "/projects/", response_model=ProjectReadWithTasksetsAndUsers, tags=["Project"]
-)
+#
+@app.post("/projects/", response_model=ProjectReadWithRelations, tags=["Project"])
 def create_project(*, session: Session = Depends(get_session), project: ProjectCreate):
     db_project = Project.from_orm(project)
     session.add(db_project)
@@ -234,9 +263,7 @@ def create_project(*, session: Session = Depends(get_session), project: ProjectC
     return db_project
 
 
-@app.get(
-    "/projects/", response_model=List[ProjectReadWithTasksetsAndUsers], tags=["Project"]
-)
+@app.get("/projects/", response_model=List[ProjectReadWithRelations], tags=["Project"])
 def get_projects(*, session: Session = Depends(get_session)):
     projects = session.exec(select(Project)).all()
     return projects
@@ -244,7 +271,7 @@ def get_projects(*, session: Session = Depends(get_session)):
 
 @app.get(
     "/projects/{project_id}",
-    response_model=ProjectReadWithTasksetsAndUsers,
+    response_model=ProjectReadWithRelations,
     tags=["Project"],
 )
 def get_project(*, session: Session = Depends(get_session), project_id):
@@ -256,7 +283,7 @@ def get_project(*, session: Session = Depends(get_session), project_id):
 
 @app.patch(
     "/projects/{project_id}",
-    response_model=ProjectReadWithTasksetsAndUsers,
+    response_model=ProjectReadWithRelations,
     tags=["Project"],
 )
 def update_project(
@@ -287,7 +314,7 @@ def delete_project(*, session: Session = Depends(get_session), project_id: int):
 
 @app.post(
     "/projects/{project_id}/tasksets/{taskset_id}",
-    response_model=ProjectReadWithTasksetsAndUsers,
+    response_model=ProjectReadWithRelations,
     tags=["Project"],
 )
 def register_taskset(
@@ -340,7 +367,7 @@ def unregister_taskset(
 
 @app.post(
     "/projects/{project_id}/users/{user_id}",
-    response_model=ProjectReadWithTasksetsAndUsers,
+    response_model=ProjectReadWithRelations,
     tags=["Project"],
 )
 def register_user(*, session: Session = Depends(get_session), project_id: int, user_id):
@@ -364,7 +391,7 @@ def register_user(*, session: Session = Depends(get_session), project_id: int, u
 
 @app.delete(
     "/projects/{project_id}/users/{user_id}",
-    response_model=ProjectReadWithTasksetsAndUsers,
+    response_model=ProjectReadWithRelations,
     tags=["Project"],
 )
 def unregister_user(

@@ -9,7 +9,7 @@ services:
     ports:
       - "8000:8000"
     volumes:
-    - ./database.db:/app/database.db
+    - ./data:/app/data:rw
     - ./database.py:/app/database.py:ro
     - ./models.py:/app/models.py:ro
     - ./app.py:/app/app.py:ro

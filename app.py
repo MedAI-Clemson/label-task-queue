@@ -17,47 +17,6 @@ def on_startup():
 
 
 #
-# Items
-#
-
-
-@app.get("/items/{item_id}", response_model=ItemReadWithDataset, tags=["Item"])
-def get_item(*, session: Session = Depends(get_session), item_id):
-    item = session.get(Item, item_id)
-    if not item:
-        raise HTTPException(status_code=404, detail="Item not found")
-    return item
-
-
-@app.patch("/items/{item_id}", response_model=ItemReadWithDataset, tags=["Item"])
-def update_item(
-    *, session: Session = Depends(get_session), item_id: int, item: ItemUpdate
-):
-    db_item = session.get(Item, item_id)
-    if not item:
-        raise HTTPException(status_code=404, detail="Item not found")
-
-    item_dict = item.dict(exclude_unset=True)
-    for k, v in item_dict.items():
-        setattr(db_item, k, v)
-    session.add(db_item)
-    session.commit()
-    session.refresh(db_item)
-    return db_item
-
-
-@app.delete("/items/{item_id}", tags=["Item"])
-def delete_item(*, session: Session = Depends(get_session), item_id: int):
-    # TODO: delete item data file as well
-    item = session.get(Item, item_id)
-    if not item:
-        raise HTTPException(status_code=404, detail="Item not found")
-    session.delete(item)
-    session.commit()
-    return {"ok": True}
-
-
-#
 # Datasets
 #
 @app.post("/datasets/", response_model=DatasetReadWithRelations, tags=["Dataset"])
@@ -85,20 +44,20 @@ def get_dataset(*, session: Session = Depends(get_session), dataset_id):
     return dataset
 
 
-@app.post("/dataset/{dataset_id}/items/", tags=["Dataset"])
-def create_items(
-    *, session: Session = Depends(get_session), dataset_id, items: List[ItemCreate]
+@app.post("/dataset/{dataset_id}/records/", tags=["Dataset"])
+def create_records(
+    *, session: Session = Depends(get_session), dataset_id, records: List[RecordCreate]
 ):
     dataset = session.get(Dataset, dataset_id)
     if not dataset:
         raise HTTPException(status_code=404, detail="Dataset not found")
 
-    db_items = []
-    for item in items:
-        it = Item.from_orm(item)
+    db_records = []
+    for record in records:
+        it = Record.from_orm(record)
         it.dataset_id = dataset_id
-        db_items.append(it)
-    session.add_all(db_items)
+        db_records.append(it)
+    session.add_all(db_records)
     session.commit()
 
     return {"ok": True}
@@ -130,6 +89,46 @@ def delete_dataset(*, session: Session = Depends(get_session), dataset_id: int):
     if not dataset:
         raise HTTPException(status_code=404, detail="Dataset not found")
     session.delete(dataset)
+    session.commit()
+    return {"ok": True}
+
+
+#
+# Records
+#
+@app.get("/records/{record_id}", response_model=RecordReadWithDataset, tags=["Record"])
+def get_record(*, session: Session = Depends(get_session), record_id):
+    record = session.get(Record, record_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Record not found")
+    return record
+
+
+@app.patch(
+    "/records/{record_id}", response_model=RecordReadWithDataset, tags=["Record"]
+)
+def update_record(
+    *, session: Session = Depends(get_session), record_id: int, record: RecordUpdate
+):
+    db_record = session.get(Record, record_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Record not found")
+
+    record_dict = record.dict(exclude_unset=True)
+    for k, v in record_dict.items():
+        setattr(db_record, k, v)
+    session.add(db_record)
+    session.commit()
+    session.refresh(db_record)
+    return db_record
+
+
+@app.delete("/records/{record_id}", tags=["Record"])
+def delete_record(*, session: Session = Depends(get_session), record_id: int):
+    record = session.get(Record, record_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Record not found")
+    session.delete(record)
     session.commit()
     return {"ok": True}
 
@@ -191,6 +190,55 @@ def delete_taskset(*, session: Session = Depends(get_session), taskset_id: int):
     if not taskset:
         raise HTTPException(status_code=404, detail="Taskset not found")
     session.delete(taskset)
+    session.commit()
+    return {"ok": True}
+
+
+#
+# QueueStep
+#
+@app.get(
+    "/queuesteps/{queuestep_id}",
+    response_model=QueueStepReadWithProject,
+    tags=["QueueStep"],
+)
+def get_queuestep(*, session: Session = Depends(get_session), queuestep_id):
+    queuestep = session.get(QueueStep, queuestep_id)
+    if not queuestep:
+        raise HTTPException(status_code=404, detail="QueueStep not found")
+    return queuestep
+
+
+@app.patch(
+    "/queuesteps/{queuestep_id}",
+    response_model=QueueStepReadWithProject,
+    tags=["QueueStep"],
+)
+def update_queuestep(
+    *,
+    session: Session = Depends(get_session),
+    queuestep_id: int,
+    queuestep: QueueStepUpdate
+):
+    db_queuestep = session.get(QueueStep, queuestep_id)
+    if not queuestep:
+        raise HTTPException(status_code=404, detail="QueueStep not found")
+
+    queuestep_dict = queuestep.dict(exclude_unset=True)
+    for k, v in queuestep_dict.items():
+        setattr(db_queuestep, k, v)
+    session.add(db_queuestep)
+    session.commit()
+    session.refresh(db_queuestep)
+    return db_queuestep
+
+
+@app.delete("/queuesteps/{queuestep_id}", tags=["QueueStep"])
+def delete_queuestep(*, session: Session = Depends(get_session), queuestep_id: int):
+    queuestep = session.get(QueueStep, queuestep_id)
+    if not queuestep:
+        raise HTTPException(status_code=404, detail="QueueStep not found")
+    session.delete(queuestep)
     session.commit()
     return {"ok": True}
 
@@ -416,3 +464,19 @@ def unregister_user(
         )
 
     return project
+
+
+@app.post("/projects/{project_id}/queue_step/", tags=["Project"])
+def create_queuestep(
+    *, session: Session = Depends(get_session), project_id, queuestep: QueueStepCreate
+):
+    project = session.get(Project, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    db_queuestep = QueueStep.from_orm(queuestep)
+    db_queuestep.project_id = project_id
+    session.add(db_queuestep)
+    session.commit()
+
+    return {"ok": True}

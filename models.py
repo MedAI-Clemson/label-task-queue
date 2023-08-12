@@ -6,36 +6,36 @@ from sqlmodel import Field, Relationship, Enum, Column, String, SQLModel, JSON
 
 
 #
-# Item models
+# Record models
 #
-class ItemBase(SQLModel):
+class RecordBase(SQLModel):
     data: Dict = Field(default={}, sa_column=Column(JSON))
 
 
-class Item(ItemBase, table=True):
+class Record(RecordBase, table=True):
     id: Optional[int] = Field(default=None, primary_key=True, index=True)
-    # items are required to belong to a dataset
+    # records are required to belong to a dataset
     dataset_id: int = Field(default=None, foreign_key="dataset.id", index=True)
 
-    dataset: "Dataset" = Relationship(back_populates="items")
+    dataset: "Dataset" = Relationship(back_populates="records")
 
 
-class ItemRead(ItemBase):
+class RecordRead(RecordBase):
     id: int
 
 
-class ItemCreate(ItemBase):
+class RecordCreate(RecordBase):
     pass
 
 
-class ItemUpdate(ItemBase):
+class RecordUpdate(RecordBase):
     data: Optional[Dict]
 
 
 #
 # Dataset models
-# we add a dataset model to collect a set of items
-# this allows items to be used across different tasksets
+# we add a dataset model to collect a set of records
+# this allows records to be used across different tasksets
 #
 class DatasetBase(SQLModel):
     name: str
@@ -45,7 +45,7 @@ class DatasetBase(SQLModel):
 class Dataset(DatasetBase, table=True):
     id: Optional[int] = Field(default=None, primary_key=True, index=True)
 
-    items: List["Item"] = Relationship(back_populates="dataset")
+    records: List["Record"] = Relationship(back_populates="dataset")
     tasksets: List["Taskset"] = Relationship(back_populates="dataset")
 
 
@@ -53,7 +53,7 @@ class DatasetRead(DatasetBase):
     id: int
 
 
-class ItemReadWithDataset(ItemRead):
+class RecordReadWithDataset(RecordRead):
     dataset: DatasetRead
 
 
@@ -114,7 +114,7 @@ class TasksetRead(TasksetBase):
 
 
 class DatasetReadWithRelations(DatasetRead):
-    items: List["ItemRead"]
+    records: List["RecordRead"]
     tasksets: List["TasksetRead"]
 
 
@@ -159,6 +159,45 @@ class UserUpdate(UserBase):
 
 
 #
+# QueueStep
+#
+class QueueType(enum.Enum):
+    random = "Random"
+    consensus = "Consensus"
+    priority = "Priority"
+
+
+class QueueStepBase(SQLModel):
+    name: str
+    description: Optional[str]
+    num_records: int
+    type: QueueType = Field(sa_column=Column(Enum(QueueType)))
+    policy_args: Dict = Field(default={}, sa_column=Column(JSON))
+
+
+class QueueStep(QueueStepBase, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    project_id: int = Field(default=None, foreign_key="project.id", index=True)
+
+    project: "Project" = Relationship(back_populates="queue_steps")
+
+
+class QueueStepRead(QueueStepBase):
+    id: int
+
+
+class QueueStepCreate(QueueStepBase):
+    pass
+
+
+class QueueStepUpdate(QueueStepBase):
+    name: Optional[str]
+    num_records: Optional[int]
+    type: Optional[QueueType]
+    policy_args: Optional[Dict]
+
+
+#
 # Project models
 #
 class ProjectBase(SQLModel):
@@ -168,12 +207,13 @@ class ProjectBase(SQLModel):
 
 class Project(ProjectBase, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
-    tasksets: List["Taskset"] = Relationship(
+    tasksets: List[Taskset] = Relationship(
         back_populates="projects", link_model=ProjectTasksetLink
     )
-    users: List["User"] = Relationship(
+    users: List[User] = Relationship(
         back_populates="projects", link_model=ProjectUserLink
     )
+    queue_steps: List[QueueStep] = Relationship(back_populates="project")
 
 
 class ProjectCreate(ProjectBase):
@@ -191,12 +231,20 @@ class ProjectUpdate(ProjectBase):
 class ProjectReadWithRelations(ProjectRead):
     tasksets: List[TasksetRead]
     users: List[UserRead]
+    queue_steps: List[QueueStepRead]
 
 
+#
+# Read classes that rely on other classes defined below them
+#
 class TasksetReadWithRelations(TasksetRead):
-    projects: List["ProjectRead"]
+    projects: List[ProjectRead]
     dataset: DatasetRead
 
 
 class UserReadWithProjects(UserRead):
     projects: List[ProjectRead]
+
+
+class QueueStepReadWithProject(QueueStepRead):
+    project: ProjectRead

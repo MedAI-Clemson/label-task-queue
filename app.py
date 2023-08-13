@@ -8,7 +8,7 @@ from typing import List
 from database import create_db_and_tables, get_session
 from models import *
 
-app = FastAPI()
+app = FastAPI(swagger_ui_parameters={"tryItOutEnabled": "true"})
 
 
 @app.on_event("startup")
@@ -466,7 +466,11 @@ def unregister_user(
     return project
 
 
-@app.post("/projects/{project_id}/queue_step/", tags=["Project"])
+@app.post(
+    "/projects/{project_id}/queue_step/",
+    response_model=QueueStepReadWithProject,
+    tags=["Project"],
+)
 def create_queuestep(
     *, session: Session = Depends(get_session), project_id, queuestep: QueueStepCreate
 ):
@@ -474,9 +478,19 @@ def create_queuestep(
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    db_queuestep = QueueStep.from_orm(queuestep)
-    db_queuestep.project_id = project_id
-    session.add(db_queuestep)
-    session.commit()
+    # can only create steps at the end
+    # a different method will handle changing order
+    rank = 1
+    if len(project.queue_steps) > 0:
+        rank += max(project.queue_steps, key=lambda x: x.rank).rank
 
-    return {"ok": True}
+    # add fields needed for db then commit
+    queuestep = QueueStep.from_orm(queuestep)
+    queuestep.project_id = project_id
+    queuestep.num_records_completed = 0
+    queuestep.rank = rank
+    session.add(queuestep)
+    session.commit()
+    session.refresh(queuestep)
+
+    return queuestep

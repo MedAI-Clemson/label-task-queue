@@ -1,8 +1,8 @@
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Annotated
 import enum
 
 from pydantic import EmailStr
-from sqlmodel import Field, Relationship, Enum, Column, String, SQLModel, JSON
+from sqlmodel import Field, Relationship, Enum, Column, String, SQLModel, JSON, Integer
 
 
 #
@@ -170,7 +170,7 @@ class QueueType(enum.Enum):
 class QueueStepBase(SQLModel):
     name: str
     description: Optional[str]
-    num_records: int
+    num_records: Annotated[int, Field(gt=0)]
     type: QueueType = Field(sa_column=Column(Enum(QueueType)))
     policy_args: Dict = Field(default={}, sa_column=Column(JSON))
 
@@ -178,12 +178,16 @@ class QueueStepBase(SQLModel):
 class QueueStep(QueueStepBase, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     project_id: int = Field(default=None, foreign_key="project.id", index=True)
+    num_records_completed: int = 0
+    rank: int = Field(default=None, sa_column=Column("rank", Integer, unique=True))
 
     project: "Project" = Relationship(back_populates="queue_steps")
 
 
 class QueueStepRead(QueueStepBase):
     id: int
+    num_records_completed: int
+    rank: int
 
 
 class QueueStepCreate(QueueStepBase):

@@ -469,7 +469,7 @@ def unregister_user(
 @app.post(
     "/projects/{project_id}/queue_step/",
     response_model=QueueStepReadWithProject,
-    tags=["Project"],
+    tags=["Project", "QueueStep"],
 )
 def create_queuestep(
     *, session: Session = Depends(get_session), project_id, queuestep: QueueStepCreate
@@ -481,8 +481,8 @@ def create_queuestep(
     # can only create steps at the end
     # a different method will handle changing order
     rank = 1
-    if len(project.queue_steps) > 0:
-        rank += max(project.queue_steps, key=lambda x: x.rank).rank
+    if len(project.queuesteps) > 0:
+        rank += max(project.queuesteps, key=lambda x: x.rank).rank
 
     # add fields needed for db then commit
     queuestep = QueueStep.from_orm(queuestep)
@@ -494,3 +494,39 @@ def create_queuestep(
     session.refresh(queuestep)
 
     return queuestep
+
+
+@app.post(
+    "/projects/{project_id}/{user_id}/task/",
+    response_model=TaskReadWithRelations,
+    tags=["Project", "Task"],
+)
+def create_task(
+    *, session: Session = Depends(get_session), project_id: int, user_id: int
+):
+    project = session.get(Project, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    project_users = {user.id for user in project.users}
+    if user_id not in project_users:
+        raise HTTPException(status_code=404, detail="User does not belong to project")
+
+    # get the next task from the queue
+    # TODO: currrently, works if taskset not assigned to project
+    next_task: NextTask = project.get_next_task(user_id)
+
+    task = Task(
+        record_id=next_task.record_id,
+        taskset_id=next_task.taskset_id,
+        user_id=user_id,
+        queuestep_id=next_task.queuestep_id,
+        project_id=project_id,
+    )
+
+    # add fields needed for db then commit
+    session.add(task)
+    session.commit()
+    session.refresh(task)
+
+    return TaskReadWithRelations.from_orm(task)

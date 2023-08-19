@@ -1,12 +1,23 @@
 from typing import Optional, List, Dict, Annotated
 import enum
+from datetime import datetime
 
-from pydantic import EmailStr
-from sqlmodel import Field, Relationship, Enum, Column, String, SQLModel, JSON, Integer
+from pydantic import BaseModel, EmailStr
+from sqlmodel import (
+    Field,
+    Relationship,
+    Enum,
+    Column,
+    String,
+    SQLModel,
+    JSON,
+    Integer,
+    DateTime,
+)
 
 
 #
-# Record models
+# Record models - records represent individual data items
 #
 class RecordBase(SQLModel):
     data: Dict = Field(default={}, sa_column=Column(JSON))
@@ -18,6 +29,7 @@ class Record(RecordBase, table=True):
     dataset_id: int = Field(default=None, foreign_key="dataset.id", index=True)
 
     dataset: "Dataset" = Relationship(back_populates="records")
+    tasks: "Task" = Relationship(back_populates="record")
 
 
 class RecordRead(RecordBase):
@@ -103,6 +115,7 @@ class Taskset(TasksetBase, table=True):
         back_populates="tasksets", link_model=ProjectTasksetLink
     )
     dataset: Dataset = Relationship(back_populates="tasksets")
+    tasks: List["Task"] = Relationship(back_populates="taskset")
 
 
 class TasksetCreate(TasksetBase):
@@ -124,6 +137,57 @@ class TasksetUpdate(TasksetBase):
 
 
 #
+# Tasks
+#
+class TaskBase(SQLModel):
+    """
+    Task models
+    - an item from a taskset that is assigned to a particular user
+    - includes the completed data payload once completed
+    - tasks are only created in the context of a project
+    - the project must have at least one user, incomplete queuestep, and non-empty taskset
+    """
+
+    pass
+
+
+class Task(TaskBase, table=True):
+    # id variables
+    id: Optional[int] = Field(default=None, primary_key=True, index=True)
+    record_id: int = Field(default=None, foreign_key="record.id")
+    taskset_id: int = Field(default=None, foreign_key="taskset.id")
+    user_id: int = Field(default=None, foreign_key="user.id", index=True)
+    queuestep_id: int = Field(default=None, foreign_key="queuestep.id")
+    project_id: int = Field(default=None, foreign_key="project.id", index=True)
+
+    # data
+    created_at: datetime = Field(
+        sa_column=Column(DateTime, nullable=False, default=datetime.utcnow),
+        index=True,
+    )
+    completed: bool = Field(default=False)
+    completed_data: Dict = Field(default={}, sa_column=Column(JSON))
+
+    # relationships
+    record: "Record" = Relationship(back_populates="tasks")
+    taskset: "Taskset" = Relationship(back_populates="tasks")
+    user: "User" = Relationship(back_populates="tasks")
+    queuestep: "QueueStep" = Relationship(back_populates="tasks")
+    project: "Project" = Relationship(back_populates="tasks")
+
+
+class TaskRead(TaskBase):
+    id: int
+    created_at: datetime
+    completed: bool
+    completed_data: Dict
+
+
+class TaskUpdate(TaskBase):
+    completed_data: Optional[Dict]
+
+
+#
 # User models
 #
 class Role(enum.Enum):
@@ -142,6 +206,8 @@ class User(UserBase, table=True):
     projects: List["Project"] = Relationship(
         back_populates="users", link_model=ProjectUserLink
     )
+
+    tasks: List["Task"] = Relationship(back_populates="user")
 
 
 class UserCreate(UserBase):
@@ -181,7 +247,8 @@ class QueueStep(QueueStepBase, table=True):
     num_records_completed: int = 0
     rank: int = Field(default=None, sa_column=Column("rank", Integer, unique=True))
 
-    project: "Project" = Relationship(back_populates="queue_steps")
+    project: "Project" = Relationship(back_populates="queuesteps")
+    tasks: List["Task"] = Relationship(back_populates="queuestep")
 
 
 class QueueStepRead(QueueStepBase):
@@ -209,6 +276,12 @@ class ProjectBase(SQLModel):
     description: Optional[str]
 
 
+class NextTask(BaseModel):
+    taskset_id: int
+    record_id: int
+    queuestep_id: int
+
+
 class Project(ProjectBase, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     tasksets: List[Taskset] = Relationship(
@@ -217,7 +290,13 @@ class Project(ProjectBase, table=True):
     users: List[User] = Relationship(
         back_populates="projects", link_model=ProjectUserLink
     )
-    queue_steps: List[QueueStep] = Relationship(back_populates="project")
+    queuesteps: List[QueueStep] = Relationship(back_populates="project")
+    tasks: List[Task] = Relationship(back_populates="project")
+
+    def get_next_task(self, user_id) -> NextTask:
+        # TODO: implement this logic
+
+        return NextTask(taskset_id=1, record_id=1, queuestep_id=1)
 
 
 class ProjectCreate(ProjectBase):
@@ -235,7 +314,7 @@ class ProjectUpdate(ProjectBase):
 class ProjectReadWithRelations(ProjectRead):
     tasksets: List[TasksetRead]
     users: List[UserRead]
-    queue_steps: List[QueueStepRead]
+    queuesteps: List[QueueStepRead]
 
 
 #
@@ -252,3 +331,11 @@ class UserReadWithProjects(UserRead):
 
 class QueueStepReadWithProject(QueueStepRead):
     project: ProjectRead
+
+
+class TaskReadWithRelations(TaskRead):
+    taskset: Taskset
+    record: Record
+    user: User
+    project: Project
+    queuestep: QueueStep

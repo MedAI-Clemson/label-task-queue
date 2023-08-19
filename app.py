@@ -514,7 +514,7 @@ def create_task(
 
     # get the next task from the queue
     # TODO: currrently, works if taskset not assigned to project
-    next_task: NextTask = project.get_next_task(user_id)
+    next_task: NextTask = project.get_next_assignment(user_id)
 
     task = Task(
         record_id=next_task.record_id,

@@ -139,6 +139,8 @@ class TasksetUpdate(TasksetBase):
 #
 # Tasks
 #
+
+
 class TaskBase(SQLModel):
     """
     Task models
@@ -185,6 +187,16 @@ class TaskRead(TaskBase):
 
 class TaskUpdate(TaskBase):
     completed_data: Optional[Dict]
+
+
+class NextTask(BaseModel):
+    """
+    NextTask represents the metadata produced by the queue to specify a task to pass to the labeler.
+    """
+
+    taskset_id: int
+    record_id: int
+    queuestep_id: int
 
 
 #
@@ -246,15 +258,20 @@ class QueueStep(QueueStepBase, table=True):
     project_id: int = Field(default=None, foreign_key="project.id", index=True)
     num_records_completed: int = 0
     rank: int = Field(default=None, sa_column=Column("rank", Integer, unique=True))
+    completed: bool = False
 
     project: "Project" = Relationship(back_populates="queuesteps")
     tasks: List["Task"] = Relationship(back_populates="queuestep")
+
+    def get_next_task(self) -> NextTask:
+        return NextTask(taskset_id=1, record_id=1, queuestep_id=1)
 
 
 class QueueStepRead(QueueStepBase):
     id: int
     num_records_completed: int
     rank: int
+    completed: bool
 
 
 class QueueStepCreate(QueueStepBase):
@@ -276,12 +293,6 @@ class ProjectBase(SQLModel):
     description: Optional[str]
 
 
-class NextTask(BaseModel):
-    taskset_id: int
-    record_id: int
-    queuestep_id: int
-
-
 class Project(ProjectBase, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     tasksets: List[Taskset] = Relationship(
@@ -293,10 +304,22 @@ class Project(ProjectBase, table=True):
     queuesteps: List[QueueStep] = Relationship(back_populates="project")
     tasks: List[Task] = Relationship(back_populates="project")
 
-    def get_next_task(self, user_id) -> NextTask:
-        # TODO: implement this logic
+    def get_active_queuestep(self) -> QueueStep:
+        """
+        The active questep is the queuestep with lowest rank that is not completed.
+        """
+        incomplete_queuesteps: List[QueueStep] = list(
+            filter(lambda x: not x.completed, self.queuesteps)
+        )
+        return min(incomplete_queuesteps, key=lambda x: x.rank)
 
-        return NextTask(taskset_id=1, record_id=1, queuestep_id=1)
+    def get_next_assignment(self, user_id) -> NextTask:
+        """
+        Get a
+        """
+        active_queuestep = self.get_active_queuestep()
+
+        return active_queuestep.get_next_task()
 
 
 class ProjectCreate(ProjectBase):

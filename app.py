@@ -25,7 +25,7 @@ def create_dataset(*, session: Session = Depends(get_session), dataset: DatasetC
     session.add(db_dataset)
     session.commit()
     session.refresh(db_dataset)
-    return db_dataset
+    return DatasetReadWithRelations.from_orm(db_dataset)
 
 
 @app.get("/datasets/", response_model=List[DatasetReadWithRelations], tags=["Dataset"])
@@ -93,6 +93,77 @@ def delete_dataset(*, session: Session = Depends(get_session), dataset_id: int):
     return {"ok": True}
 
 
+@app.post(
+    "/datasets/{dataset_id}/labelqueues/{labelqueue_id}",
+    tags=["Dataset"],
+)
+def register_dataset(
+    *, session: Session = Depends(get_session), labelqueue_id: int, dataset_id
+):
+    """
+    Register a dataset to a labelqueue. A dataset may be registered to multiple labelqueues,
+    but a labelqueue may only have one dataset. This method raises an error if the labelqueue
+    already has a dataset. To change a labelqueue's
+    dataset, first unregister the existing dataset, and then register the new dataset.
+    """
+    labelqueue = session.get(LabelQueue, labelqueue_id)
+    if not labelqueue:
+        raise HTTPException(status_code=404, detail="LabelQueue not found")
+
+    if labelqueue.dataset:
+        raise HTTPException(
+            status_code=406,
+            detail="LabelQueue already has a dataset. First remove the existing dataset.",
+        )
+
+    dataset = session.get(Dataset, dataset_id)
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    labelqueue.dataset = dataset
+    session.add(labelqueue)
+    session.commit()
+    session.refresh(labelqueue)
+
+    return {"ok": True}
+
+
+@app.delete("/datasets/{dataset_id}/labelqueues/{labelqueue_id}", tags=["Dataset"])
+def unregister_dataset(
+    *, session: Session = Depends(get_session), labelqueue_id: int, dataset_id: int
+):
+    """
+    Unregister a dataset from a labelqueue.
+    Retains all completed tasks.
+    """
+    labelqueue = session.get(LabelQueue, labelqueue_id)
+    if not labelqueue:
+        raise HTTPException(status_code=404, detail="LabelQueue not found")
+
+    dataset = session.get(Dataset, dataset_id)
+    if not dataset:
+        raise HTTPException(status_code=404, detail="Dataset not found.")
+
+    if labelqueue.dataset is None:
+        raise HTTPException(
+            status_code=406,
+            detail="LabelQueue does not have a registered dataset, so cannot unregister.",
+        )
+
+    if labelqueue.dataset.id != dataset_id:
+        raise HTTPException(
+            status_code=406,
+            detail=f"Tried to unregister dataset with ID={dataset_id} but labelqueue with ID={labelqueue_id} has dataset ID={labelqueue.dataset.id}",
+        )
+
+    labelqueue.dataset = None
+    session.add(labelqueue)
+    session.commit()
+    session.refresh(labelqueue)
+
+    return {"ok": True}
+
+
 #
 # Records
 #
@@ -134,119 +205,9 @@ def delete_record(*, session: Session = Depends(get_session), record_id: int):
 
 
 #
-# Tasksets
-#
-@app.post("/tasksets/", response_model=TasksetReadWithRelations, tags=["Taskset"])
-def create_taskset(*, session: Session = Depends(get_session), taskset: TasksetCreate):
-    db_taskset = Taskset.from_orm(taskset)
-    # TODO: make sure provided dataset exists
-    if not session.get(Dataset, db_taskset.dataset_id):
-        raise HTTPException(status_code=404, detail="Dataset not found")
-    session.add(db_taskset)
-    session.commit()
-    session.refresh(db_taskset)
-    return db_taskset
-
-
-@app.get("/tasksets/", response_model=List[TasksetReadWithRelations], tags=["Taskset"])
-def get_tasksets(*, session: Session = Depends(get_session)):
-    tasksets = session.exec(select(Taskset)).all()
-    return tasksets
-
-
-@app.get(
-    "/tasksets/{taskset_id}", response_model=TasksetReadWithRelations, tags=["Taskset"]
-)
-def get_taskset(*, session: Session = Depends(get_session), taskset_id):
-    taskset = session.get(Taskset, taskset_id)
-    if not taskset:
-        raise HTTPException(status_code=404, detail="Taskset not found")
-    return taskset
-
-
-@app.patch(
-    "/tasksets/{taskset_id}", response_model=TasksetReadWithRelations, tags=["Taskset"]
-)
-def update_taskset(
-    *, session: Session = Depends(get_session), taskset_id: int, taskset: TasksetUpdate
-):
-    db_taskset = session.get(Taskset, taskset_id)
-    if not taskset:
-        raise HTTPException(status_code=404, detail="Taskset not found")
-
-    taskset_dict = taskset.dict(exclude_unset=True)
-    for k, v in taskset_dict.items():
-        setattr(db_taskset, k, v)
-    session.add(db_taskset)
-    session.commit()
-    session.refresh(db_taskset)
-    return db_taskset
-
-
-@app.delete("/tasksets/{taskset_id}", tags=["Taskset"])
-def delete_taskset(*, session: Session = Depends(get_session), taskset_id: int):
-    # TODO: delete taskset data file as well
-    taskset = session.get(Taskset, taskset_id)
-    if not taskset:
-        raise HTTPException(status_code=404, detail="Taskset not found")
-    session.delete(taskset)
-    session.commit()
-    return {"ok": True}
-
-
-#
-# QueueStep
-#
-@app.get(
-    "/queuesteps/{queuestep_id}",
-    response_model=QueueStepReadWithProject,
-    tags=["QueueStep"],
-)
-def get_queuestep(*, session: Session = Depends(get_session), queuestep_id):
-    queuestep = session.get(QueueStep, queuestep_id)
-    if not queuestep:
-        raise HTTPException(status_code=404, detail="QueueStep not found")
-    return queuestep
-
-
-@app.patch(
-    "/queuesteps/{queuestep_id}",
-    response_model=QueueStepReadWithProject,
-    tags=["QueueStep"],
-)
-def update_queuestep(
-    *,
-    session: Session = Depends(get_session),
-    queuestep_id: int,
-    queuestep: QueueStepUpdate
-):
-    db_queuestep = session.get(QueueStep, queuestep_id)
-    if not queuestep:
-        raise HTTPException(status_code=404, detail="QueueStep not found")
-
-    queuestep_dict = queuestep.dict(exclude_unset=True)
-    for k, v in queuestep_dict.items():
-        setattr(db_queuestep, k, v)
-    session.add(db_queuestep)
-    session.commit()
-    session.refresh(db_queuestep)
-    return db_queuestep
-
-
-@app.delete("/queuesteps/{queuestep_id}", tags=["QueueStep"])
-def delete_queuestep(*, session: Session = Depends(get_session), queuestep_id: int):
-    queuestep = session.get(QueueStep, queuestep_id)
-    if not queuestep:
-        raise HTTPException(status_code=404, detail="QueueStep not found")
-    session.delete(queuestep)
-    session.commit()
-    return {"ok": True}
-
-
-#
 # Users
 #
-@app.post("/users/", response_model=UserReadWithProjects, tags=["User"])
+@app.post("/users/", response_model=UserReadWithLabelQueues, tags=["User"])
 def create_user(*, session: Session = Depends(get_session), user: UserCreate):
     db_user = User.from_orm(user)
     session.add(db_user)
@@ -258,13 +219,13 @@ def create_user(*, session: Session = Depends(get_session), user: UserCreate):
     return db_user
 
 
-@app.get("/users/", response_model=List[UserReadWithProjects], tags=["User"])
+@app.get("/users/", response_model=List[UserReadWithLabelQueues], tags=["User"])
 def get_users(*, session: Session = Depends(get_session)):
     users = session.exec(select(User)).all()
     return users
 
 
-@app.get("/users/{user_id}", response_model=UserReadWithProjects, tags=["User"])
+@app.get("/users/{user_id}", response_model=UserReadWithLabelQueues, tags=["User"])
 def get_user(*, session: Session = Depends(get_session), user_id):
     user = session.get(User, user_id)
     if not user:
@@ -272,7 +233,7 @@ def get_user(*, session: Session = Depends(get_session), user_id):
     return user
 
 
-@app.patch("/users/{user_id}", response_model=UserReadWithProjects, tags=["User"])
+@app.patch("/users/{user_id}", response_model=UserReadWithLabelQueues, tags=["User"])
 def update_user(
     *, session: Session = Depends(get_session), user_id: int, user: UserUpdate
 ):
@@ -300,193 +261,207 @@ def delete_user(*, session: Session = Depends(get_session), user_id: int):
 
 
 #
-# Projects
+# QueueStep
 #
-@app.post("/projects/", response_model=ProjectReadWithRelations, tags=["Project"])
-def create_project(*, session: Session = Depends(get_session), project: ProjectCreate):
-    db_project = Project.from_orm(project)
-    session.add(db_project)
-    session.commit()
-    session.refresh(db_project)
-    return db_project
-
-
-@app.get("/projects/", response_model=List[ProjectReadWithRelations], tags=["Project"])
-def get_projects(*, session: Session = Depends(get_session)):
-    projects = session.exec(select(Project)).all()
-    return projects
-
-
 @app.get(
-    "/projects/{project_id}",
-    response_model=ProjectReadWithRelations,
-    tags=["Project"],
+    "/queuesteps/{queuestep_id}",
+    response_model=QueueStepReadWithLabelQueue,
+    tags=["QueueStep"],
 )
-def get_project(*, session: Session = Depends(get_session), project_id):
-    project = session.get(Project, project_id)
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
-    return project
+def get_queuestep(*, session: Session = Depends(get_session), queuestep_id):
+    queuestep = session.get(QueueStep, queuestep_id)
+    if not queuestep:
+        raise HTTPException(status_code=404, detail="QueueStep not found")
+    return queuestep
 
 
 @app.patch(
-    "/projects/{project_id}",
-    response_model=ProjectReadWithRelations,
-    tags=["Project"],
+    "/queuesteps/{queuestep_id}",
+    response_model=QueueStepReadWithLabelQueue,
+    tags=["QueueStep"],
 )
-def update_project(
-    *, session: Session = Depends(get_session), project_id: int, project: ProjectUpdate
+def update_queuestep(
+    *,
+    session: Session = Depends(get_session),
+    queuestep_id: int,
+    queuestep: QueueStepUpdate,
 ):
-    db_project = session.get(Project, project_id)
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
+    db_queuestep = session.get(QueueStep, queuestep_id)
+    if not queuestep:
+        raise HTTPException(status_code=404, detail="QueueStep not found")
 
-    project_dict = project.dict(exclude_unset=True)
-    for k, v in project_dict.items():
-        setattr(db_project, k, v)
-    session.add(db_project)
+    queuestep_dict = queuestep.dict(exclude_unset=True)
+    for k, v in queuestep_dict.items():
+        setattr(db_queuestep, k, v)
+    session.add(db_queuestep)
     session.commit()
-    session.refresh(db_project)
-    return db_project
+    session.refresh(db_queuestep)
+    return db_queuestep
 
 
-@app.delete("/projects/{project_id}", tags=["Project"])
-def delete_project(*, session: Session = Depends(get_session), project_id: int):
-    project = session.get(Project, project_id)
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
-    session.delete(project)
+@app.delete("/queuesteps/{queuestep_id}", tags=["QueueStep"])
+def delete_queuestep(*, session: Session = Depends(get_session), queuestep_id: int):
+    queuestep = session.get(QueueStep, queuestep_id)
+    if not queuestep:
+        raise HTTPException(status_code=404, detail="QueueStep not found")
+    session.delete(queuestep)
+    session.commit()
+    return {"ok": True}
+
+
+#
+# LabelQueues
+#
+@app.post(
+    "/labelqueues/", response_model=LabelQueueReadWithRelations, tags=["LabelQueue"]
+)
+def create_labelqueue(
+    *, session: Session = Depends(get_session), labelqueue: LabelQueueCreate
+):
+    db_labelqueue = LabelQueue.from_orm(labelqueue)
+    session.add(db_labelqueue)
+    session.commit()
+    session.refresh(db_labelqueue)
+    return db_labelqueue
+
+
+@app.get(
+    "/labelqueues/",
+    response_model=List[LabelQueueReadWithRelations],
+    tags=["LabelQueue"],
+)
+def get_labelqueues(*, session: Session = Depends(get_session)):
+    labelqueues = session.exec(select(LabelQueue)).all()
+    return labelqueues
+
+
+@app.get(
+    "/labelqueues/{labelqueue_id}",
+    response_model=LabelQueueReadWithRelations,
+    tags=["LabelQueue"],
+)
+def get_labelqueue(*, session: Session = Depends(get_session), labelqueue_id):
+    labelqueue = session.get(LabelQueue, labelqueue_id)
+    if not labelqueue:
+        raise HTTPException(status_code=404, detail="LabelQueue not found")
+    return labelqueue
+
+
+@app.patch(
+    "/labelqueues/{labelqueue_id}",
+    response_model=LabelQueueReadWithRelations,
+    tags=["LabelQueue"],
+)
+def update_labelqueue(
+    *,
+    session: Session = Depends(get_session),
+    labelqueue_id: int,
+    labelqueue: LabelQueueUpdate,
+):
+    db_labelqueue = session.get(LabelQueue, labelqueue_id)
+    if not labelqueue:
+        raise HTTPException(status_code=404, detail="LabelQueue not found")
+
+    labelqueue_dict = labelqueue.dict(exclude_unset=True)
+    for k, v in labelqueue_dict.items():
+        setattr(db_labelqueue, k, v)
+    session.add(db_labelqueue)
+    session.commit()
+    session.refresh(db_labelqueue)
+    return db_labelqueue
+
+
+@app.delete("/labelqueues/{labelqueue_id}", tags=["LabelQueue"])
+def delete_labelqueue(*, session: Session = Depends(get_session), labelqueue_id: int):
+    labelqueue = session.get(LabelQueue, labelqueue_id)
+    if not labelqueue:
+        raise HTTPException(status_code=404, detail="LabelQueue not found")
+    session.delete(labelqueue)
     session.commit()
     return {"ok": True}
 
 
 @app.post(
-    "/projects/{project_id}/tasksets/{taskset_id}",
-    response_model=ProjectReadWithRelations,
-    tags=["Project"],
+    "/labelqueues/{labelqueue_id}/users/{user_id}",
+    response_model=LabelQueueReadWithRelations,
+    tags=["LabelQueue"],
 )
-def register_taskset(
-    *, session: Session = Depends(get_session), project_id: int, taskset_id
+def register_user(
+    *, session: Session = Depends(get_session), labelqueue_id: int, user_id
 ):
-    project = session.get(Project, project_id)
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
-    taskset = session.get(Taskset, taskset_id)
-    if not taskset:
-        raise HTTPException(status_code=404, detail="Taskset not found")
-
-    if taskset.id not in {ts.id for ts in project.tasksets}:
-        project.tasksets.append(taskset)
-        session.add(project)
-        session.commit()
-        session.refresh(project)
-    else:
-        raise HTTPException(
-            status_code=406, detail="Taskset already present in project."
-        )
-
-    return project
-
-
-@app.delete("/projects/{project_id}/tasksets/{taskset_id}", tags=["Project"])
-def unregister_taskset(
-    *, session: Session = Depends(get_session), project_id: int, taskset_id
-):
-    project = session.get(Project, project_id)
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
-
-    taskset = session.get(Taskset, taskset_id)
-    if not taskset:
-        raise HTTPException(status_code=404, detail="Taskset not found")
-
-    if taskset.id in {ts.id for ts in project.tasksets}:
-        project.tasksets = [ts for ts in project.tasksets if ts.id != taskset.id]
-        session.add(project)
-        session.commit()
-        session.refresh(project)
-    else:
-        raise HTTPException(
-            status_code=406, detail="Taskset not registered so cannot unregister."
-        )
-
-    return project
-
-
-@app.post(
-    "/projects/{project_id}/users/{user_id}",
-    response_model=ProjectReadWithRelations,
-    tags=["Project"],
-)
-def register_user(*, session: Session = Depends(get_session), project_id: int, user_id):
-    project = session.get(Project, project_id)
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
+    labelqueue = session.get(LabelQueue, labelqueue_id)
+    if not labelqueue:
+        raise HTTPException(status_code=404, detail="LabelQueue not found")
     user = session.get(User, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    if user.id not in {ts.id for ts in project.users}:
-        project.users.append(user)
-        session.add(project)
+    if user.id not in {ts.id for ts in labelqueue.users}:
+        labelqueue.users.append(user)
+        session.add(labelqueue)
         session.commit()
-        session.refresh(project)
+        session.refresh(labelqueue)
     else:
-        raise HTTPException(status_code=406, detail="User already present in project.")
+        raise HTTPException(
+            status_code=406, detail="User already present in labelqueue."
+        )
 
-    return project
+    return labelqueue
 
 
 @app.delete(
-    "/projects/{project_id}/users/{user_id}",
-    response_model=ProjectReadWithRelations,
-    tags=["Project"],
+    "/labelqueues/{labelqueue_id}/users/{user_id}",
+    response_model=LabelQueueReadWithRelations,
+    tags=["LabelQueue"],
 )
 def unregister_user(
-    *, session: Session = Depends(get_session), project_id: int, user_id
+    *, session: Session = Depends(get_session), labelqueue_id: int, user_id
 ):
-    project = session.get(Project, project_id)
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
+    labelqueue = session.get(LabelQueue, labelqueue_id)
+    if not labelqueue:
+        raise HTTPException(status_code=404, detail="LabelQueue not found")
 
     user = session.get(User, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    if user.id in {ts.id for ts in project.users}:
-        project.users = [ts for ts in project.users if ts.id != user.id]
-        session.add(project)
+    if user.id in {ts.id for ts in labelqueue.users}:
+        labelqueue.users = [ts for ts in labelqueue.users if ts.id != user.id]
+        session.add(labelqueue)
         session.commit()
-        session.refresh(project)
+        session.refresh(labelqueue)
     else:
         raise HTTPException(
             status_code=406, detail="User not registered so cannot unregister."
         )
 
-    return project
+    return labelqueue
 
 
 @app.post(
-    "/projects/{project_id}/queue_step/",
-    response_model=QueueStepReadWithProject,
-    tags=["Project", "QueueStep"],
+    "/labelqueues/{labelqueue_id}/queue_step/",
+    response_model=QueueStepReadWithLabelQueue,
+    tags=["LabelQueue", "QueueStep"],
 )
 def create_queuestep(
-    *, session: Session = Depends(get_session), project_id, queuestep: QueueStepCreate
+    *,
+    session: Session = Depends(get_session),
+    labelqueue_id,
+    queuestep: QueueStepCreate,
 ):
-    project = session.get(Project, project_id)
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
+    labelqueue = session.get(LabelQueue, labelqueue_id)
+    if not labelqueue:
+        raise HTTPException(status_code=404, detail="LabelQueue not found")
 
     # can only create steps at the end
     # a different method will handle changing order
     rank = 1
-    if len(project.queuesteps) > 0:
-        rank += max(project.queuesteps, key=lambda x: x.rank).rank
+    if len(labelqueue.queuesteps) > 0:
+        rank += max(labelqueue.queuesteps, key=lambda x: x.rank).rank
 
     # add fields needed for db then commit
     queuestep = QueueStep.from_orm(queuestep)
-    queuestep.project_id = project_id
+    queuestep.labelqueue_id = labelqueue_id
     queuestep.num_records_completed = 0
     queuestep.rank = rank
     session.add(queuestep)
@@ -497,31 +472,37 @@ def create_queuestep(
 
 
 @app.post(
-    "/projects/{project_id}/{user_id}/task/",
+    "/labelqueues/{labelqueue_id}/{user_id}/task/",
     response_model=TaskReadWithRelations,
-    tags=["Project", "Task"],
+    tags=["LabelQueue"],
 )
 def create_task(
-    *, session: Session = Depends(get_session), project_id: int, user_id: int
+    *, session: Session = Depends(get_session), labelqueue_id: int, user_id: int
 ):
-    project = session.get(Project, project_id)
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
+    labelqueue = session.get(LabelQueue, labelqueue_id)
+    if not labelqueue:
+        raise HTTPException(status_code=404, detail="LabelQueue not found")
 
-    project_users = {user.id for user in project.users}
-    if user_id not in project_users:
-        raise HTTPException(status_code=404, detail="User does not belong to project")
+    labelqueue_users = {user.id for user in labelqueue.users}
+    if user_id not in labelqueue_users:
+        raise HTTPException(
+            status_code=404, detail="User does not belong to labelqueue"
+        )
 
     # get the next task from the queue
-    # TODO: currrently, works if taskset not assigned to project
-    next_task: NextTask = project.get_next_assignment(user_id)
+    try:
+        next_task: NextTask = labelqueue.get_next_assignment(user_id)
+    except Exception as e:
+        raise HTTPException(
+            status_code=404, detail=f"Unable to get task assignment. Reason: {repr(e)}"
+        )
 
     task = Task(
         record_id=next_task.record_id,
-        taskset_id=next_task.taskset_id,
+        dataset_id=next_task.dataset_id,
         user_id=user_id,
         queuestep_id=next_task.queuestep_id,
-        project_id=project_id,
+        labelqueue_id=labelqueue_id,
     )
 
     # add fields needed for db then commit

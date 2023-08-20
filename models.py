@@ -47,7 +47,6 @@ class RecordUpdate(RecordBase):
 #
 # Dataset models
 # we add a dataset model to collect a set of records
-# this allows records to be used across different tasksets
 #
 class DatasetBase(SQLModel):
     name: str
@@ -58,7 +57,8 @@ class Dataset(DatasetBase, table=True):
     id: Optional[int] = Field(default=None, primary_key=True, index=True)
 
     records: List["Record"] = Relationship(back_populates="dataset")
-    tasksets: List["Taskset"] = Relationship(back_populates="dataset")
+    labelqueues: List["LabelQueue"] = Relationship(back_populates="dataset")
+    tasks: List["Task"] = Relationship(back_populates="dataset")
 
 
 class DatasetRead(DatasetBase):
@@ -78,62 +78,15 @@ class DatasetUpdate(DatasetBase):
 
 
 #
-# Link models for Project, taskset, and user many-to-many relationships
+# Link models for LabelQueue, dataset, and user many-to-many relationships
 #
-class ProjectTasksetLink(SQLModel, table=True):
-    project_id: Optional[int] = Field(
-        default=None, foreign_key="project.id", primary_key=True
-    )
-    taskset_id: Optional[int] = Field(
-        default=None, foreign_key="taskset.id", primary_key=True
-    )
-
-
-class ProjectUserLink(SQLModel, table=True):
-    project_id: Optional[int] = Field(
-        default=None, foreign_key="project.id", primary_key=True
+class LabelQueueUserLink(SQLModel, table=True):
+    labelqueue_id: Optional[int] = Field(
+        default=None, foreign_key="labelqueue.id", primary_key=True
     )
     user_id: Optional[int] = Field(
         default=None, foreign_key="user.id", primary_key=True
     )
-
-
-#
-# Taskset models
-#
-class TasksetBase(SQLModel):
-    name: str
-    description: Optional[str]
-    # tasksets are required to have a dataset
-    dataset_id: int = Field(default=None, foreign_key="dataset.id", index=True)
-
-
-class Taskset(TasksetBase, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True)
-
-    projects: List["Project"] = Relationship(
-        back_populates="tasksets", link_model=ProjectTasksetLink
-    )
-    dataset: Dataset = Relationship(back_populates="tasksets")
-    tasks: List["Task"] = Relationship(back_populates="taskset")
-
-
-class TasksetCreate(TasksetBase):
-    pass
-
-
-class TasksetRead(TasksetBase):
-    id: int
-
-
-class DatasetReadWithRelations(DatasetRead):
-    records: List["RecordRead"]
-    tasksets: List["TasksetRead"]
-
-
-class TasksetUpdate(TasksetBase):
-    name: Optional[str]
-    dataset_id: Optional[int]
 
 
 #
@@ -144,10 +97,10 @@ class TasksetUpdate(TasksetBase):
 class TaskBase(SQLModel):
     """
     Task models
-    - an item from a taskset that is assigned to a particular user
+    - an item from a dataset that is assigned to a particular user
     - includes the completed data payload once completed
-    - tasks are only created in the context of a project
-    - the project must have at least one user, incomplete queuestep, and non-empty taskset
+    - tasks are only created in the context of a labelqueue
+    - the labelqueue must have at least one user, incomplete queuestep, and non-empty dataset
     """
 
     pass
@@ -157,10 +110,10 @@ class Task(TaskBase, table=True):
     # id variables
     id: Optional[int] = Field(default=None, primary_key=True, index=True)
     record_id: int = Field(default=None, foreign_key="record.id")
-    taskset_id: int = Field(default=None, foreign_key="taskset.id")
+    dataset_id: int = Field(default=None, foreign_key="dataset.id")
     user_id: int = Field(default=None, foreign_key="user.id", index=True)
     queuestep_id: int = Field(default=None, foreign_key="queuestep.id")
-    project_id: int = Field(default=None, foreign_key="project.id", index=True)
+    labelqueue_id: int = Field(default=None, foreign_key="labelqueue.id", index=True)
 
     # data
     created_at: datetime = Field(
@@ -172,10 +125,10 @@ class Task(TaskBase, table=True):
 
     # relationships
     record: "Record" = Relationship(back_populates="tasks")
-    taskset: "Taskset" = Relationship(back_populates="tasks")
+    dataset: "Dataset" = Relationship(back_populates="tasks")
     user: "User" = Relationship(back_populates="tasks")
     queuestep: "QueueStep" = Relationship(back_populates="tasks")
-    project: "Project" = Relationship(back_populates="tasks")
+    labelqueue: "LabelQueue" = Relationship(back_populates="tasks")
 
 
 class TaskRead(TaskBase):
@@ -194,7 +147,7 @@ class NextTask(BaseModel):
     NextTask represents the metadata produced by the queue to specify a task to pass to the labeler.
     """
 
-    taskset_id: int
+    dataset_id: int
     record_id: int
     queuestep_id: int
 
@@ -215,8 +168,8 @@ class UserBase(SQLModel):
 
 class User(UserBase, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
-    projects: List["Project"] = Relationship(
-        back_populates="users", link_model=ProjectUserLink
+    labelqueues: List["LabelQueue"] = Relationship(
+        back_populates="users", link_model=LabelQueueUserLink
     )
 
     tasks: List["Task"] = Relationship(back_populates="user")
@@ -255,16 +208,16 @@ class QueueStepBase(SQLModel):
 
 class QueueStep(QueueStepBase, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
-    project_id: int = Field(default=None, foreign_key="project.id", index=True)
+    labelqueue_id: int = Field(default=None, foreign_key="labelqueue.id", index=True)
     num_records_completed: int = 0
     rank: int = Field(default=None, sa_column=Column("rank", Integer, unique=True))
     completed: bool = False
 
-    project: "Project" = Relationship(back_populates="queuesteps")
+    labelqueue: "LabelQueue" = Relationship(back_populates="queuesteps")
     tasks: List["Task"] = Relationship(back_populates="queuestep")
 
     def get_next_task(self) -> NextTask:
-        return NextTask(taskset_id=1, record_id=1, queuestep_id=1)
+        return NextTask(dataset_id=1, record_id=1, queuestep_id=1)
 
 
 class QueueStepRead(QueueStepBase):
@@ -286,23 +239,26 @@ class QueueStepUpdate(QueueStepBase):
 
 
 #
-# Project models
+# LabelQueue models
 #
-class ProjectBase(SQLModel):
+class LabelQueueBase(SQLModel):
     name: str
     description: Optional[str]
 
 
-class Project(ProjectBase, table=True):
+class LabelQueue(LabelQueueBase, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
-    tasksets: List[Taskset] = Relationship(
-        back_populates="projects", link_model=ProjectTasksetLink
+    dataset_id: Optional[int] = Field(
+        default=None, foreign_key="dataset.id", index=True
     )
+
+    # relationships
+    dataset: Optional[Dataset] = Relationship(back_populates="labelqueues")
     users: List[User] = Relationship(
-        back_populates="projects", link_model=ProjectUserLink
+        back_populates="labelqueues", link_model=LabelQueueUserLink
     )
-    queuesteps: List[QueueStep] = Relationship(back_populates="project")
-    tasks: List[Task] = Relationship(back_populates="project")
+    queuesteps: List[QueueStep] = Relationship(back_populates="labelqueue")
+    tasks: List[Task] = Relationship(back_populates="labelqueue")
 
     def get_active_queuestep(self) -> QueueStep:
         """
@@ -311,54 +267,58 @@ class Project(ProjectBase, table=True):
         incomplete_queuesteps: List[QueueStep] = list(
             filter(lambda x: not x.completed, self.queuesteps)
         )
+
+        if len(incomplete_queuesteps) < 1:
+            raise ValueError("The LabelQueue does not have any incomplete queuesteps.")
+
         return min(incomplete_queuesteps, key=lambda x: x.rank)
 
     def get_next_assignment(self, user_id) -> NextTask:
         """
-        Get a
+        Get a qualifying next assignment for the user using the queuestep policy.
         """
+
         active_queuestep = self.get_active_queuestep()
 
         return active_queuestep.get_next_task()
 
 
-class ProjectCreate(ProjectBase):
+class LabelQueueCreate(LabelQueueBase):
     pass
 
 
-class ProjectRead(ProjectBase):
+class LabelQueueRead(LabelQueueBase):
     id: int
 
 
-class ProjectUpdate(ProjectBase):
+class LabelQueueUpdate(LabelQueueBase):
     name: Optional[str]
 
 
-class ProjectReadWithRelations(ProjectRead):
-    tasksets: List[TasksetRead]
+class LabelQueueReadWithRelations(LabelQueueRead):
+    dataset: Optional[Dataset]
     users: List[UserRead]
     queuesteps: List[QueueStepRead]
 
 
 #
 # Read classes that rely on other classes defined below them
-#
-class TasksetReadWithRelations(TasksetRead):
-    projects: List[ProjectRead]
-    dataset: DatasetRead
+class UserReadWithLabelQueues(UserRead):
+    labelqueues: List[LabelQueueRead]
 
 
-class UserReadWithProjects(UserRead):
-    projects: List[ProjectRead]
-
-
-class QueueStepReadWithProject(QueueStepRead):
-    project: ProjectRead
+class QueueStepReadWithLabelQueue(QueueStepRead):
+    labelqueue: LabelQueueRead
 
 
 class TaskReadWithRelations(TaskRead):
-    taskset: Taskset
+    dataset: Dataset
     record: Record
     user: User
-    project: Project
+    labelqueue: LabelQueue
     queuestep: QueueStep
+
+
+class DatasetReadWithRelations(DatasetRead):
+    records: List["RecordRead"]
+    labelqueues: List["LabelQueue"]

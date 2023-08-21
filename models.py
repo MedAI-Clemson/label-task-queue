@@ -1,6 +1,7 @@
-from typing import Optional, List, Dict, Annotated
+from typing import Optional, List, Dict, Annotated, Union
 import enum
 from datetime import datetime
+import random
 
 from pydantic import BaseModel, EmailStr
 from sqlmodel import (
@@ -120,7 +121,7 @@ class Task(TaskBase, table=True):
         sa_column=Column(DateTime, nullable=False, default=datetime.utcnow),
         index=True,
     )
-    completed: bool = Field(default=False)
+    completed: bool = Field(default=False, index=True)
     completed_data: Dict = Field(default={}, sa_column=Column(JSON))
 
     # relationships
@@ -193,9 +194,10 @@ class UserUpdate(UserBase):
 # QueueStep
 #
 class QueueType(enum.Enum):
-    random = "Random"
-    consensus = "Consensus"
-    priority = "Priority"
+    sequential = "sequential"
+    random = "random"
+    consensus = "consensus"
+    priority = "priority"
 
 
 class QueueStepBase(SQLModel):
@@ -216,8 +218,65 @@ class QueueStep(QueueStepBase, table=True):
     labelqueue: "LabelQueue" = Relationship(back_populates="queuesteps")
     tasks: List["Task"] = Relationship(back_populates="queuestep")
 
-    def get_next_task(self) -> NextTask:
-        return NextTask(dataset_id=1, record_id=1, queuestep_id=1)
+    def get_next_task(self, user_id) -> NextTask:
+        match self.type:
+            case QueueType.sequential:
+                task = self._get_next_task_sequential()
+            case QueueType.random:
+                task = self._get_next_task_random()
+            case QueueType.consensus:
+                task = self._get_next_task_consensus(user_id)
+            case QueueType.priority:
+                task = self._get_next_task_priority(user_id)
+            case _:
+                raise NotImplementedError(
+                    f"The {self.type.name} queue policy has not been implemented."
+                )
+
+        return task
+
+    def _get_next_task_sequential(self) -> Union[NextTask, None]:
+        remaining_record_ids = self._get_remaining_records()
+        if len(remaining_record_ids) == 0:
+            return None
+
+        # for the sequential policy, simply select the task with minimum id
+        # this does not take advantage of the table index
+        record_id = min(remaining_record_ids)
+
+        return NextTask(
+            dataset_id=self.labelqueue.dataset_id,
+            record_id=record_id,
+            queuestep_id=self.id,
+        )
+
+    def _get_next_task_random(self) -> Union[NextTask, None]:
+        remaining_record_ids = self._get_remaining_records()
+        if len(remaining_record_ids) == 0:
+            return None
+
+        record_id = random.choice(remaining_record_ids)
+
+        return NextTask(
+            dataset_id=self.labelqueue.dataset_id,
+            record_id=record_id,
+            queuestep_id=self.id,
+        )
+
+    def _get_next_task_consensus(self, user_id) -> Union[NextTask, None]:
+        raise NotImplementedError("_get_next_task_consensus has not been implemented")
+
+    def _get_next_task_priority(self, user_id) -> Union[NextTask, None]:
+        raise NotImplementedError("_get_next_task_priority has not been implemented")
+
+    def _get_remaining_records(self):
+        assigned_record_ids = {task.record.id for task in self.labelqueue.tasks}
+
+        return [
+            record.id
+            for record in self.labelqueue.dataset.records
+            if record.id not in assigned_record_ids
+        ]
 
 
 class QueueStepRead(QueueStepBase):
@@ -260,7 +319,7 @@ class LabelQueue(LabelQueueBase, table=True):
     queuesteps: List[QueueStep] = Relationship(back_populates="labelqueue")
     tasks: List[Task] = Relationship(back_populates="labelqueue")
 
-    def get_active_queuestep(self) -> QueueStep:
+    def get_active_queuestep(self) -> Union[QueueStep, None]:
         """
         The active questep is the queuestep with lowest rank that is not completed.
         """
@@ -269,18 +328,18 @@ class LabelQueue(LabelQueueBase, table=True):
         )
 
         if len(incomplete_queuesteps) < 1:
-            raise ValueError("The LabelQueue does not have any incomplete queuesteps.")
+            return None
+        else:
+            return min(incomplete_queuesteps, key=lambda x: x.rank)
 
-        return min(incomplete_queuesteps, key=lambda x: x.rank)
-
-    def get_next_assignment(self, user_id) -> NextTask:
+    def get_next_task(self, user_id) -> NextTask:
         """
-        Get a qualifying next assignment for the user using the queuestep policy.
+        Get a qualifying next task for the user using the queuestep policy.
         """
 
         active_queuestep = self.get_active_queuestep()
 
-        return active_queuestep.get_next_task()
+        return active_queuestep.get_next_task(user_id)
 
 
 class LabelQueueCreate(LabelQueueBase):
@@ -299,6 +358,7 @@ class LabelQueueReadWithRelations(LabelQueueRead):
     dataset: Optional[Dataset]
     users: List[UserRead]
     queuesteps: List[QueueStepRead]
+    tasks: List[TaskRead]
 
 
 #

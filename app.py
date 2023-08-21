@@ -479,23 +479,50 @@ def create_queuestep(
 def create_task(
     *, session: Session = Depends(get_session), labelqueue_id: int, user_id: int
 ):
+    # TODO: it should not be possible to create more tasks than the queuestep has capacity for.
+
+    # check preconditions
     labelqueue = session.get(LabelQueue, labelqueue_id)
     if not labelqueue:
-        raise HTTPException(status_code=404, detail="LabelQueue not found")
+        raise HTTPException(status_code=404, detail="Labelqueue not found")
 
     labelqueue_users = {user.id for user in labelqueue.users}
     if user_id not in labelqueue_users:
         raise HTTPException(
-            status_code=404, detail="User does not belong to labelqueue"
+            status_code=404,
+            detail="The provided user does not belong to the labelqueue.",
+        )
+
+    if labelqueue.dataset is None:
+        raise HTTPException(
+            status_code=406,
+            detail="Cannot create a task because this labelqueue does not have a registered dataset.",
+        )
+
+    if len(labelqueue.dataset.records) == 0:
+        raise HTTPException(
+            status_code=406,
+            detail="Cannot create a task because the registered dataset does not have any records.",
+        )
+
+    queuestep: Union[QueueStep, None] = labelqueue.get_active_queuestep()
+    if queuestep is None:
+        raise HTTPException(
+            status_code=406,
+            detail="Cannot create a task because this labelqueue does not have an active queue step.",
         )
 
     # get the next task from the queue
     try:
-        next_task: NextTask = labelqueue.get_next_assignment(user_id)
+        next_task: NextTask = labelqueue.get_next_task(user_id)
     except Exception as e:
         raise HTTPException(
-            status_code=404, detail=f"Unable to get task assignment. Reason: {repr(e)}"
+            status_code=406, detail=f"Unable to get task assignment. Reason: {repr(e)}"
         )
+
+    # TODO: This indicates that the queue is empty. There should be a custom object to make this more explicit to the client.
+    if next_task is None:
+        raise HTTPException(status_code=406, detail="Queue is empty.")
 
     task = Task(
         record_id=next_task.record_id,

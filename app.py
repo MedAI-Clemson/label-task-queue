@@ -1,7 +1,5 @@
-import os
-
-from fastapi import FastAPI, HTTPException, Depends, File, UploadFile
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, Depends
+from fastapi.encoders import jsonable_encoder
 from sqlmodel import Session, select
 from typing import List
 
@@ -14,6 +12,12 @@ app = FastAPI(swagger_ui_parameters={"tryItOutEnabled": "true"})
 @app.on_event("startup")
 def on_startup():
     create_db_and_tables()
+
+
+# TODO: get specific task
+# TODO: get user tasks
+# TODO: make random a policy parameter to the default policy and combine default and sequential
+# TODO: implement consensus policy
 
 
 #
@@ -287,7 +291,7 @@ def update_queuestep(
     queuestep: QueueStepUpdate,
 ):
     db_queuestep = session.get(QueueStep, queuestep_id)
-    if not queuestep:
+    if not db_queuestep:
         raise HTTPException(status_code=404, detail="QueueStep not found")
 
     queuestep_dict = queuestep.dict(exclude_unset=True)
@@ -296,6 +300,7 @@ def update_queuestep(
     session.add(db_queuestep)
     session.commit()
     session.refresh(db_queuestep)
+    print("!" * 50)
     return db_queuestep
 
 
@@ -464,6 +469,8 @@ def create_queuestep(
     queuestep.labelqueue_id = labelqueue_id
     queuestep.num_records_completed = 0
     queuestep.rank = rank
+    # jsonable_encoder allows for insertion of pydantic model into json field
+    queuestep.policy_args = jsonable_encoder(queuestep.policy_args)
     session.add(queuestep)
     session.commit()
     session.refresh(queuestep)

@@ -3,7 +3,7 @@ import enum
 from datetime import datetime
 import random
 
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, validator
 from sqlmodel import (
     Field,
     Relationship,
@@ -22,6 +22,9 @@ from sqlmodel import (
 #
 class RecordBase(SQLModel):
     data: Dict = Field(default={}, sa_column=Column(JSON))
+
+    class Config:
+        validate_assignment = True
 
 
 class Record(RecordBase, table=True):
@@ -52,6 +55,9 @@ class RecordUpdate(RecordBase):
 class DatasetBase(SQLModel):
     name: str
     description: Optional[str]
+
+    class Config:
+        validate_assignment = True
 
 
 class Dataset(DatasetBase, table=True):
@@ -104,7 +110,8 @@ class TaskBase(SQLModel):
     - the labelqueue must have at least one user, incomplete queuestep, and non-empty dataset
     """
 
-    pass
+    class Config:
+        validate_assignment = True
 
 
 class Task(TaskBase, table=True):
@@ -166,6 +173,9 @@ class UserBase(SQLModel):
     email: EmailStr = Field(sa_column=Column("email", String, unique=True))
     role: Role = Field(sa_column=Column(Enum(Role)))
 
+    class Config:
+        validate_assignment = True
+
 
 class User(UserBase, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -194,10 +204,24 @@ class UserUpdate(UserBase):
 # QueueStep
 #
 class QueueType(enum.Enum):
-    sequential = "sequential"
-    random = "random"
+    distribute = "distribute"
     consensus = "consensus"
     priority = "priority"
+
+
+class PolicyArgsBase(BaseModel):
+    class Config:
+        validate_assignment = True
+        orm_mode = True
+        extra = "forbid"
+
+
+class PolicyArgsDistribute(PolicyArgsBase):
+    random: bool = False
+
+
+class PolicyArgsConsensus(PolicyArgsBase):
+    pass
 
 
 class QueueStepBase(SQLModel):
@@ -205,7 +229,12 @@ class QueueStepBase(SQLModel):
     description: Optional[str]
     num_records: Annotated[int, Field(gt=0)]
     type: QueueType = Field(sa_column=Column(Enum(QueueType)))
-    policy_args: Dict = Field(default={}, sa_column=Column(JSON))
+    policy_args: Optional[Union[PolicyArgsDistribute, PolicyArgsConsensus]] = Field(
+        default=None, sa_column=Column(JSON)
+    )
+
+    class Config:
+        validate_assignment = True
 
 
 class QueueStep(QueueStepBase, table=True):
@@ -220,10 +249,8 @@ class QueueStep(QueueStepBase, table=True):
 
     def get_next_task(self, user_id) -> NextTask:
         match self.type:
-            case QueueType.sequential:
-                task = self._get_next_task_sequential()
-            case QueueType.random:
-                task = self._get_next_task_random()
+            case QueueType.distribute:
+                task = self._get_next_task_distribute()
             case QueueType.consensus:
                 task = self._get_next_task_consensus(user_id)
             case QueueType.priority:
@@ -235,27 +262,18 @@ class QueueStep(QueueStepBase, table=True):
 
         return task
 
-    def _get_next_task_sequential(self) -> Union[NextTask, None]:
+    def _get_next_task_distribute(self) -> Union[NextTask, None]:
+        policy_args = PolicyArgsDistribute(**self.policy_args)
         remaining_record_ids = self._get_remaining_records()
         if len(remaining_record_ids) == 0:
             return None
 
         # for the sequential policy, simply select the task with minimum id
         # this does not take advantage of the table index
-        record_id = min(remaining_record_ids)
-
-        return NextTask(
-            dataset_id=self.labelqueue.dataset_id,
-            record_id=record_id,
-            queuestep_id=self.id,
-        )
-
-    def _get_next_task_random(self) -> Union[NextTask, None]:
-        remaining_record_ids = self._get_remaining_records()
-        if len(remaining_record_ids) == 0:
-            return None
-
-        record_id = random.choice(remaining_record_ids)
+        if policy_args.random:
+            record_id = random.choice(remaining_record_ids)
+        else:
+            record_id = min(remaining_record_ids)
 
         return NextTask(
             dataset_id=self.labelqueue.dataset_id,
@@ -278,6 +296,30 @@ class QueueStep(QueueStepBase, table=True):
             if record.id not in assigned_record_ids
         ]
 
+    @validator("policy_args")
+    def check_policy_args_by_type(cls, value, values):
+        """
+        Validate the provided policy_args data using the model associated with the policy type.
+        This is needed because different policy types have different argument structures that need
+        separate validation logic.
+
+        If no policy arguments object is passed, instantiate the default.
+        """
+        queue_type = values.get("type")
+
+        if queue_type:
+            match queue_type:
+                case QueueType.distribute:
+                    return (
+                        PolicyArgsDistribute.from_orm(value)
+                        if value
+                        else PolicyArgsDistribute()
+                    )
+                case _:
+                    raise NotImplementedError(
+                        f"PolicyArgs has not been implemented for queue type '{queue_type}'."
+                    )
+
 
 class QueueStepRead(QueueStepBase):
     id: int
@@ -292,9 +334,8 @@ class QueueStepCreate(QueueStepBase):
 
 class QueueStepUpdate(QueueStepBase):
     name: Optional[str]
-    num_records: Optional[int]
+    num_records: Optional[Annotated[int, Field(gt=0)]]
     type: Optional[QueueType]
-    policy_args: Optional[Dict]
 
 
 #
@@ -303,6 +344,9 @@ class QueueStepUpdate(QueueStepBase):
 class LabelQueueBase(SQLModel):
     name: str
     description: Optional[str]
+
+    class Config:
+        validate_assignment = True
 
 
 class LabelQueue(LabelQueueBase, table=True):

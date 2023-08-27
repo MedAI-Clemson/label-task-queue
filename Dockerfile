@@ -23,4 +23,4 @@ ENV PORT=${port}
 # Expose the port that your FastAPI app runs on
 EXPOSE $PORT
 
-CMD ["uvicorn", "app:app", "--reload", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "main:app", "--reload", "--host", "0.0.0.0", "--port", "8000"]

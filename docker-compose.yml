@@ -9,8 +9,8 @@ services:
     ports:
       - "8000:8000"
     volumes:
-    - ./db:/app/db/:rw
-    - ./database.py:/app/database.py:ro
-    - ./models.py:/app/models.py:ro
-    - ./app.py:/app/app.py:ro
+    - ./app:/app:ro
+    - ./db:/db:rw
+    environment:
+      - DATABASE_URI=sqlite:////db/database.db
     

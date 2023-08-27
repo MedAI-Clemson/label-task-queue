@@ -8,3 +8,4 @@ passlib
 sqlmodel
 python-multipart
 httpx
+pytest

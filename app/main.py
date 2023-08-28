@@ -3,8 +3,8 @@ from fastapi.encoders import jsonable_encoder
 from sqlmodel import Session, select
 from typing import List
 
-from .database import create_db_and_tables, get_session
-from .models import *
+from database import create_db_and_tables, get_session
+from models import *
 
 app = FastAPI(swagger_ui_parameters={"tryItOutEnabled": "true"})
 

@@ -406,7 +406,7 @@ class LabelQueueReadWithRelations(LabelQueueRead):
 
 
 #
-# Read classes that rely on other classes defined below them
+# Read classes for model families that rely on other classes defined below them
 class UserReadWithLabelQueues(UserRead):
     labelqueues: List[LabelQueueRead]
 

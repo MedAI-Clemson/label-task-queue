@@ -42,6 +42,12 @@ db_json = {
     "name": "Test Dataset",
     "description": "A dataset used for testing the labelq app.",
 }
+db_records = [
+    {"data": {"text": "A field of flowers"}},
+    {"data": {"text": "A pocket full of posies"}},
+    {"data": {"text": "A bird in hand is worth two in the bush"}},
+    {"data": {"text": "Why in the night sky are the lights hung."}},
+]
 
 
 def test_create_dataset(client: TestClient):
@@ -53,10 +59,13 @@ def test_create_dataset(client: TestClient):
 
 
 def test_get_datasets(client: TestClient):
+    client.post("/datasets/", json=db_json)
+    client.post("/datasets/", json=db_json)
     response = client.get("/datasets/")
     assert response.status_code == 200
 
-    [DatasetReadWithRelations(**data) for data in response.json()]
+    dataset_list = [DatasetReadWithRelations(**data) for data in response.json()]
+    assert len(dataset_list) == 2
 
 
 def test_get_dataset_by_id(client: TestClient):
@@ -64,4 +73,17 @@ def test_get_dataset_by_id(client: TestClient):
     response = client.get("/datasets/1")
     assert response.status_code == 200
 
-    DatasetReadWithRelations(**response.json())
+    dataset = DatasetReadWithRelations(**response.json())
+    assert dataset.name == db_json["name"]
+    assert dataset.description == db_json["description"]
+
+
+def test_create_records(client: TestClient):
+    client.post("/datasets/", json=db_json)
+    response = client.post("/dataset/1/records", json=db_records)
+    assert response.status_code == 200
+
+    response = client.get("/datasets/1")
+    dataset = DatasetReadWithRelations(**response.json())
+    assert len(dataset.records) == len(db_records)
+    assert dataset.records[2].data["text"] == db_records[2]["data"]["text"]

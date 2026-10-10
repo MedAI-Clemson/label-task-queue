@@ -1,17 +1,20 @@
-from fastapi import FastAPI, HTTPException, Depends
-from fastapi.encoders import jsonable_encoder
+from contextlib import asynccontextmanager
+from typing import List, Union
+
+from fastapi import Depends, FastAPI, HTTPException
 from sqlmodel import Session, select
-from typing import List
 
-from database import create_db_and_tables, get_session
-from models import *
-
-app = FastAPI(swagger_ui_parameters={"tryItOutEnabled": "true"})
+from app.database import create_db_and_tables, get_session
+from app.models import *
 
 
-@app.on_event("startup")
-def on_startup():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     create_db_and_tables()
+    yield
+
+
+app = FastAPI(lifespan=lifespan, swagger_ui_parameters={"tryItOutEnabled": True})
 
 
 # TODO: get specific task
@@ -24,11 +27,11 @@ def on_startup():
 #
 @app.post("/datasets/", response_model=DatasetReadWithRelations, tags=["Dataset"])
 def create_dataset(*, session: Session = Depends(get_session), dataset: DatasetCreate):
-    db_dataset = Dataset.from_orm(dataset)
+    db_dataset = Dataset.model_validate(dataset)
     session.add(db_dataset)
     session.commit()
     session.refresh(db_dataset)
-    return DatasetReadWithRelations.from_orm(db_dataset)
+    return db_dataset
 
 
 @app.get("/datasets/", response_model=List[DatasetReadWithRelations], tags=["Dataset"])
@@ -57,9 +60,7 @@ def create_records(
 
     db_records = []
     for record in records:
-        it = Record.from_orm(record)
-        it.dataset_id = dataset_id
-        db_records.append(it)
+        db_records.append(Record.model_validate(record, update={"dataset_id": dataset_id}))
     session.add_all(db_records)
     session.commit()
 
@@ -76,7 +77,7 @@ def update_dataset(
     if not dataset:
         raise HTTPException(status_code=404, detail="Dataset not found")
 
-    dataset_dict = dataset.dict(exclude_unset=True)
+    dataset_dict = dataset.model_dump(exclude_unset=True)
     for k, v in dataset_dict.items():
         setattr(db_dataset, k, v)
     session.add(db_dataset)
@@ -188,7 +189,7 @@ def update_record(
     if not record:
         raise HTTPException(status_code=404, detail="Record not found")
 
-    record_dict = record.dict(exclude_unset=True)
+    record_dict = record.model_dump(exclude_unset=True)
     for k, v in record_dict.items():
         setattr(db_record, k, v)
     session.add(db_record)
@@ -212,7 +213,7 @@ def delete_record(*, session: Session = Depends(get_session), record_id: int):
 #
 @app.post("/users/", response_model=UserReadWithLabelQueues, tags=["User"])
 def create_user(*, session: Session = Depends(get_session), user: UserCreate):
-    db_user = User.from_orm(user)
+    db_user = User.model_validate(user)
     session.add(db_user)
     try:
         session.commit()
@@ -244,7 +245,7 @@ def update_user(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    user_dict = user.dict(exclude_unset=True)
+    user_dict = user.model_dump(exclude_unset=True)
     for k, v in user_dict.items():
         setattr(db_user, k, v)
     session.add(db_user)
@@ -293,7 +294,7 @@ def update_queuestep(
     if not db_queuestep:
         raise HTTPException(status_code=404, detail="QueueStep not found")
 
-    queuestep_dict = queuestep.dict(exclude_unset=True)
+    queuestep_dict = queuestep.model_dump(exclude_unset=True)
     for k, v in queuestep_dict.items():
         setattr(db_queuestep, k, v)
 
@@ -322,7 +323,7 @@ def delete_queuestep(*, session: Session = Depends(get_session), queuestep_id: i
 def create_labelqueue(
     *, session: Session = Depends(get_session), labelqueue: LabelQueueCreate
 ):
-    db_labelqueue = LabelQueue.from_orm(labelqueue)
+    db_labelqueue = LabelQueue.model_validate(labelqueue)
     session.add(db_labelqueue)
     session.commit()
     session.refresh(db_labelqueue)
@@ -366,7 +367,7 @@ def update_labelqueue(
     if not labelqueue:
         raise HTTPException(status_code=404, detail="LabelQueue not found")
 
-    labelqueue_dict = labelqueue.dict(exclude_unset=True)
+    labelqueue_dict = labelqueue.model_dump(exclude_unset=True)
     for k, v in labelqueue_dict.items():
         setattr(db_labelqueue, k, v)
     session.add(db_labelqueue)
@@ -464,17 +465,16 @@ def create_queuestep(
         rank += max(labelqueue.queuesteps, key=lambda x: x.rank).rank
 
     # add fields needed for db then commit
-    queuestep = QueueStep.from_orm(queuestep)
-    queuestep.labelqueue_id = labelqueue_id
-    queuestep.num_records_completed = 0
-    queuestep.rank = rank
-    # jsonable_encoder allows for insertion of pydantic model into json field
-    queuestep.policy_args = jsonable_encoder(queuestep.policy_args)
-    session.add(queuestep)
+    # (model_dump converts the validated policy_args model into a JSON-compatible dict)
+    db_queuestep = QueueStep.model_validate(
+        queuestep.model_dump(),
+        update={"labelqueue_id": labelqueue_id, "num_records_completed": 0, "rank": rank},
+    )
+    session.add(db_queuestep)
     session.commit()
-    session.refresh(queuestep)
+    session.refresh(db_queuestep)
 
-    return queuestep
+    return db_queuestep
 
 
 @app.post(
@@ -543,4 +543,4 @@ def create_task(
     session.commit()
     session.refresh(task)
 
-    return TaskReadWithRelations.from_orm(task)
+    return task

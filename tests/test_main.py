@@ -3,10 +3,8 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session, SQLModel, create_engine
 from sqlmodel.pool import StaticPool
 
-from main import app, get_session
-from models import *
-
-client = TestClient(app)
+from app.main import app, get_session
+from app.models import DatasetReadWithRelations
 
 
 # get a clean db session for testing

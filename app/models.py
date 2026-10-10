@@ -1,30 +1,32 @@
-from typing import Optional, List, Dict, Annotated, Union
 import enum
-from datetime import datetime
 import random
+from datetime import datetime, timezone
+from typing import Any, Optional, Union
 
-from pydantic import BaseModel, EmailStr, validator
+from pydantic import BaseModel, ConfigDict, EmailStr, model_validator
 from sqlmodel import (
-    Field,
-    Relationship,
-    Enum,
-    Column,
-    String,
-    SQLModel,
     JSON,
-    Integer,
+    Column,
     DateTime,
+    Enum,
+    Field,
+    Integer,
+    Relationship,
+    SQLModel,
+    String,
 )
+
+
+def utcnow() -> datetime:
+    """Current UTC time as a naive datetime (SQLite does not store timezones)."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 #
 # Record models - records represent individual data items
 #
 class RecordBase(SQLModel):
-    data: Dict = Field(default={}, sa_column=Column(JSON))
-
-    class Config:
-        validate_assignment = True
+    data: dict = Field(default_factory=dict, sa_column=Column(JSON))
 
 
 class Record(RecordBase, table=True):
@@ -33,7 +35,7 @@ class Record(RecordBase, table=True):
     dataset_id: int = Field(default=None, foreign_key="dataset.id", index=True)
 
     dataset: "Dataset" = Relationship(back_populates="records")
-    tasks: "Task" = Relationship(back_populates="record")
+    tasks: list["Task"] = Relationship(back_populates="record")
 
 
 class RecordRead(RecordBase):
@@ -45,7 +47,7 @@ class RecordCreate(RecordBase):
 
 
 class RecordUpdate(RecordBase):
-    data: Optional[Dict]
+    data: Optional[dict] = None
 
 
 #
@@ -54,18 +56,15 @@ class RecordUpdate(RecordBase):
 #
 class DatasetBase(SQLModel):
     name: str
-    description: Optional[str]
-
-    class Config:
-        validate_assignment = True
+    description: Optional[str] = None
 
 
 class Dataset(DatasetBase, table=True):
     id: Optional[int] = Field(default=None, primary_key=True, index=True)
 
-    records: List["Record"] = Relationship(back_populates="dataset")
-    labelqueues: List["LabelQueue"] = Relationship(back_populates="dataset")
-    tasks: List["Task"] = Relationship(back_populates="dataset")
+    records: list["Record"] = Relationship(back_populates="dataset")
+    labelqueues: list["LabelQueue"] = Relationship(back_populates="dataset")
+    tasks: list["Task"] = Relationship(back_populates="dataset")
 
 
 class DatasetRead(DatasetBase):
@@ -81,7 +80,7 @@ class DatasetCreate(DatasetBase):
 
 
 class DatasetUpdate(DatasetBase):
-    name: Optional[str]
+    name: Optional[str] = None
 
 
 #
@@ -110,9 +109,6 @@ class TaskBase(SQLModel):
     - the labelqueue must have at least one user, incomplete queuestep, and non-empty dataset
     """
 
-    class Config:
-        validate_assignment = True
-
 
 class Task(TaskBase, table=True):
     # id variables
@@ -125,11 +121,11 @@ class Task(TaskBase, table=True):
 
     # data
     created_at: datetime = Field(
-        sa_column=Column(DateTime, nullable=False, default=datetime.utcnow),
-        index=True,
+        default_factory=utcnow,
+        sa_column=Column(DateTime, nullable=False, index=True),
     )
     completed: bool = Field(default=False, index=True)
-    completed_data: Dict = Field(default={}, sa_column=Column(JSON))
+    completed_data: dict = Field(default_factory=dict, sa_column=Column(JSON))
 
     # relationships
     record: "Record" = Relationship(back_populates="tasks")
@@ -143,11 +139,11 @@ class TaskRead(TaskBase):
     id: int
     created_at: datetime
     completed: bool
-    completed_data: Dict
+    completed_data: dict
 
 
 class TaskUpdate(TaskBase):
-    completed_data: Optional[Dict]
+    completed_data: Optional[dict] = None
 
 
 class NextTask(BaseModel):
@@ -173,17 +169,14 @@ class UserBase(SQLModel):
     email: EmailStr = Field(sa_column=Column("email", String, unique=True))
     role: Role = Field(sa_column=Column(Enum(Role)))
 
-    class Config:
-        validate_assignment = True
-
 
 class User(UserBase, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
-    labelqueues: List["LabelQueue"] = Relationship(
+    labelqueues: list["LabelQueue"] = Relationship(
         back_populates="users", link_model=LabelQueueUserLink
     )
 
-    tasks: List["Task"] = Relationship(back_populates="user")
+    tasks: list["Task"] = Relationship(back_populates="user")
 
 
 class UserCreate(UserBase):
@@ -195,9 +188,9 @@ class UserRead(UserBase):
 
 
 class UserUpdate(UserBase):
-    name: Optional[str]
-    email: Optional[EmailStr]
-    role: Optional[Role]
+    name: Optional[str] = None
+    email: Optional[EmailStr] = None
+    role: Optional[Role] = None
 
 
 #
@@ -210,10 +203,7 @@ class QueueType(enum.Enum):
 
 
 class PolicyArgsBase(BaseModel):
-    class Config:
-        validate_assignment = True
-        orm_mode = True
-        extra = "forbid"
+    model_config = ConfigDict(validate_assignment=True, from_attributes=True, extra="forbid")
 
 
 class PolicyArgsDistribute(PolicyArgsBase):
@@ -224,30 +214,49 @@ class PolicyArgsConsensus(PolicyArgsBase):
     pass
 
 
+PolicyArgs = Union[PolicyArgsDistribute, PolicyArgsConsensus]
+
+
+def validate_policy_args(queue_type: QueueType, value: Any) -> PolicyArgsBase:
+    """
+    Validate the provided policy_args data using the model associated with the policy type.
+    This is needed because different policy types have different argument structures that need
+    separate validation logic.
+
+    If no policy arguments object is passed, instantiate the default.
+    """
+    if isinstance(value, BaseModel):
+        value = value.model_dump()
+
+    match queue_type:
+        case QueueType.distribute:
+            return PolicyArgsDistribute.model_validate(value or {})
+        case _:
+            raise NotImplementedError(
+                f"PolicyArgs has not been implemented for queue type '{queue_type.value}'."
+            )
+
+
 class QueueStepBase(SQLModel):
     name: str
-    description: Optional[str]
-    num_records: Annotated[int, Field(gt=0)]
+    description: Optional[str] = None
+    num_records: int = Field(gt=0)
     type: QueueType = Field(sa_column=Column(Enum(QueueType)))
-    policy_args: Optional[Union[PolicyArgsDistribute, PolicyArgsConsensus]] = Field(
-        default=None, sa_column=Column(JSON)
-    )
-
-    class Config:
-        validate_assignment = True
 
 
 class QueueStep(QueueStepBase, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     labelqueue_id: int = Field(default=None, foreign_key="labelqueue.id", index=True)
+    # policy arguments are validated by QueueStepCreate and stored as plain JSON
+    policy_args: Optional[dict] = Field(default=None, sa_column=Column(JSON))
     num_records_completed: int = 0
     rank: int = Field(default=None, sa_column=Column("rank", Integer, unique=True))
     completed: bool = False
 
     labelqueue: "LabelQueue" = Relationship(back_populates="queuesteps")
-    tasks: List["Task"] = Relationship(back_populates="queuestep")
+    tasks: list["Task"] = Relationship(back_populates="queuestep")
 
-    def get_next_task(self, user_id) -> NextTask:
+    def get_next_task(self, user_id: int) -> Optional[NextTask]:
         match self.type:
             case QueueType.distribute:
                 task = self._get_next_task_distribute()
@@ -262,8 +271,8 @@ class QueueStep(QueueStepBase, table=True):
 
         return task
 
-    def _get_next_task_distribute(self) -> Union[NextTask, None]:
-        policy_args = PolicyArgsDistribute(**self.policy_args)
+    def _get_next_task_distribute(self) -> Optional[NextTask]:
+        policy_args = PolicyArgsDistribute.model_validate(self.policy_args or {})
         remaining_record_ids = self._get_remaining_records()
         if len(remaining_record_ids) == 0:
             return None
@@ -281,14 +290,14 @@ class QueueStep(QueueStepBase, table=True):
             queuestep_id=self.id,
         )
 
-    def _get_next_task_consensus(self, user_id) -> Union[NextTask, None]:
+    def _get_next_task_consensus(self, user_id: int) -> Optional[NextTask]:
         raise NotImplementedError("_get_next_task_consensus has not been implemented")
 
-    def _get_next_task_priority(self, user_id) -> Union[NextTask, None]:
+    def _get_next_task_priority(self, user_id: int) -> Optional[NextTask]:
         raise NotImplementedError("_get_next_task_priority has not been implemented")
 
-    def _get_remaining_records(self):
-        assigned_record_ids = {task.record.id for task in self.labelqueue.tasks}
+    def _get_remaining_records(self) -> list[int]:
+        assigned_record_ids = {task.record_id for task in self.labelqueue.tasks}
 
         return [
             record.id
@@ -296,46 +305,29 @@ class QueueStep(QueueStepBase, table=True):
             if record.id not in assigned_record_ids
         ]
 
-    @validator("policy_args")
-    def check_policy_args_by_type(cls, value, values):
-        """
-        Validate the provided policy_args data using the model associated with the policy type.
-        This is needed because different policy types have different argument structures that need
-        separate validation logic.
-
-        If no policy arguments object is passed, instantiate the default.
-        """
-        queue_type = values.get("type")
-
-        if queue_type:
-            match queue_type:
-                case QueueType.distribute:
-                    return (
-                        PolicyArgsDistribute.from_orm(value)
-                        if value
-                        else PolicyArgsDistribute()
-                    )
-                case _:
-                    raise NotImplementedError(
-                        f"PolicyArgs has not been implemented for queue type '{queue_type}'."
-                    )
-
 
 class QueueStepRead(QueueStepBase):
     id: int
+    policy_args: Optional[dict[str, Any]] = None
     num_records_completed: int
     rank: int
     completed: bool
 
 
 class QueueStepCreate(QueueStepBase):
-    pass
+    policy_args: Optional[PolicyArgs] = None
+
+    @model_validator(mode="after")
+    def check_policy_args_by_type(self) -> "QueueStepCreate":
+        self.policy_args = validate_policy_args(self.type, self.policy_args)
+        return self
 
 
 class QueueStepUpdate(QueueStepBase):
-    name: Optional[str]
-    num_records: Optional[Annotated[int, Field(gt=0)]]
-    type: Optional[QueueType]
+    name: Optional[str] = None
+    num_records: Optional[int] = Field(default=None, gt=0)
+    type: Optional[QueueType] = None
+    policy_args: Optional[PolicyArgs] = None
 
 
 #
@@ -343,10 +335,7 @@ class QueueStepUpdate(QueueStepBase):
 #
 class LabelQueueBase(SQLModel):
     name: str
-    description: Optional[str]
-
-    class Config:
-        validate_assignment = True
+    description: Optional[str] = None
 
 
 class LabelQueue(LabelQueueBase, table=True):
@@ -357,26 +346,24 @@ class LabelQueue(LabelQueueBase, table=True):
 
     # relationships
     dataset: Optional[Dataset] = Relationship(back_populates="labelqueues")
-    users: List[User] = Relationship(
+    users: list[User] = Relationship(
         back_populates="labelqueues", link_model=LabelQueueUserLink
     )
-    queuesteps: List[QueueStep] = Relationship(back_populates="labelqueue")
-    tasks: List[Task] = Relationship(back_populates="labelqueue")
+    queuesteps: list[QueueStep] = Relationship(back_populates="labelqueue")
+    tasks: list[Task] = Relationship(back_populates="labelqueue")
 
-    def get_active_queuestep(self) -> Union[QueueStep, None]:
+    def get_active_queuestep(self) -> Optional[QueueStep]:
         """
         The active questep is the queuestep with lowest rank that is not completed.
         """
-        incomplete_queuesteps: List[QueueStep] = list(
-            filter(lambda x: not x.completed, self.queuesteps)
-        )
+        incomplete_queuesteps = [qs for qs in self.queuesteps if not qs.completed]
 
         if len(incomplete_queuesteps) < 1:
             return None
         else:
             return min(incomplete_queuesteps, key=lambda x: x.rank)
 
-    def get_next_task(self, user_id) -> NextTask:
+    def get_next_task(self, user_id: int) -> Optional[NextTask]:
         """
         Get a qualifying next task for the user using the queuestep policy.
         """
@@ -395,20 +382,20 @@ class LabelQueueRead(LabelQueueBase):
 
 
 class LabelQueueUpdate(LabelQueueBase):
-    name: Optional[str]
+    name: Optional[str] = None
 
 
 class LabelQueueReadWithRelations(LabelQueueRead):
-    dataset: Optional[Dataset]
-    users: List[UserRead]
-    queuesteps: List[QueueStepRead]
-    tasks: List[TaskRead]
+    dataset: Optional[Dataset] = None
+    users: list[UserRead]
+    queuesteps: list[QueueStepRead]
+    tasks: list[TaskRead]
 
 
 #
 # Read classes for model families that rely on other classes defined below them
 class UserReadWithLabelQueues(UserRead):
-    labelqueues: List[LabelQueueRead]
+    labelqueues: list[LabelQueueRead]
 
 
 class QueueStepReadWithLabelQueue(QueueStepRead):
@@ -424,5 +411,5 @@ class TaskReadWithRelations(TaskRead):
 
 
 class DatasetReadWithRelations(DatasetRead):
-    records: List["RecordRead"]
-    labelqueues: List["LabelQueue"]
+    records: list["RecordRead"]
+    labelqueues: list["LabelQueue"]

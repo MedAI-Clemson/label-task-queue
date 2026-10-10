@@ -1,7 +1,8 @@
 #!/bin/bash
-source env/bin/activate
-export DATABASE_URI="sqlite:////home/exouser/labelq/db/database.db"
+# Run the test suite (uses an in-memory database; no DATABASE_URI needed).
+# Activates ./env if present.
+set -euo pipefail
+cd "$(dirname "$0")"
+[ -f env/bin/activate ] && source env/bin/activate
 
-cd app
-
-python -m pytest -s test_main.py
+exec python -m pytest "$@"

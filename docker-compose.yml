@@ -1,16 +1,9 @@
-version: "3"
 services:
   app:
-    build: 
-      context: .
-      args:
-        - host=0.0.0.0
-        - port=8000
+    build: .
     ports:
       - "8000:8000"
     volumes:
-    - ./app:/app:ro
-    - ./db:/db:rw
+      - ./db:/db:rw
     environment:
       - DATABASE_URI=sqlite:////db/database.db
-    

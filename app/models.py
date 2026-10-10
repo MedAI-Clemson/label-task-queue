@@ -10,10 +10,10 @@ from sqlmodel import (
     DateTime,
     Enum,
     Field,
-    Integer,
     Relationship,
     SQLModel,
     String,
+    UniqueConstraint,
 )
 
 
@@ -62,7 +62,8 @@ class DatasetBase(SQLModel):
 class Dataset(DatasetBase, table=True):
     id: Optional[int] = Field(default=None, primary_key=True, index=True)
 
-    records: list["Record"] = Relationship(back_populates="dataset")
+    # records belong to their dataset and are deleted with it
+    records: list["Record"] = Relationship(back_populates="dataset", cascade_delete=True)
     labelqueues: list["LabelQueue"] = Relationship(back_populates="dataset")
     tasks: list["Task"] = Relationship(back_populates="dataset")
 
@@ -232,7 +233,9 @@ def validate_policy_args(queue_type: QueueType, value: Any) -> PolicyArgsBase:
         case QueueType.distribute:
             return PolicyArgsDistribute.model_validate(value or {})
         case _:
-            raise NotImplementedError(
+            # ValueError (rather than NotImplementedError) so that pydantic reports a
+            # validation error (HTTP 422) instead of crashing the request
+            raise ValueError(
                 f"PolicyArgs has not been implemented for queue type '{queue_type.value}'."
             )
 
@@ -245,12 +248,15 @@ class QueueStepBase(SQLModel):
 
 
 class QueueStep(QueueStepBase, table=True):
+    # rank orders the steps within a single labelqueue
+    __table_args__ = (UniqueConstraint("labelqueue_id", "rank"),)
+
     id: Optional[int] = Field(default=None, primary_key=True)
     labelqueue_id: int = Field(default=None, foreign_key="labelqueue.id", index=True)
     # policy arguments are validated by QueueStepCreate and stored as plain JSON
     policy_args: Optional[dict] = Field(default=None, sa_column=Column(JSON))
     num_records_completed: int = 0
-    rank: int = Field(default=None, sa_column=Column("rank", Integer, unique=True))
+    rank: int = Field(default=None)
     completed: bool = False
 
     labelqueue: "LabelQueue" = Relationship(back_populates="queuesteps")
@@ -273,6 +279,12 @@ class QueueStep(QueueStepBase, table=True):
 
     def _get_next_task_distribute(self) -> Optional[NextTask]:
         policy_args = PolicyArgsDistribute.model_validate(self.policy_args or {})
+
+        # the distribute policy assigns each record once, so the step is at capacity
+        # once it has handed out num_records tasks
+        if len(self.tasks) >= self.num_records:
+            return None
+
         remaining_record_ids = self._get_remaining_records()
         if len(remaining_record_ids) == 0:
             return None
@@ -297,6 +309,9 @@ class QueueStep(QueueStepBase, table=True):
         raise NotImplementedError("_get_next_task_priority has not been implemented")
 
     def _get_remaining_records(self) -> list[int]:
+        # NOTE: records are considered assigned if they have a task under *any* step of
+        # the labelqueue, not only this step. Whether later steps should be able to
+        # re-assign records is an open design question.
         assigned_record_ids = {task.record_id for task in self.labelqueue.tasks}
 
         return [
@@ -349,7 +364,10 @@ class LabelQueue(LabelQueueBase, table=True):
     users: list[User] = Relationship(
         back_populates="labelqueues", link_model=LabelQueueUserLink
     )
-    queuesteps: list[QueueStep] = Relationship(back_populates="labelqueue")
+    # queuesteps belong to their labelqueue and are deleted with it
+    queuesteps: list[QueueStep] = Relationship(
+        back_populates="labelqueue", cascade_delete=True
+    )
     tasks: list[Task] = Relationship(back_populates="labelqueue")
 
     def get_active_queuestep(self) -> Optional[QueueStep]:
@@ -366,9 +384,13 @@ class LabelQueue(LabelQueueBase, table=True):
     def get_next_task(self, user_id: int) -> Optional[NextTask]:
         """
         Get a qualifying next task for the user using the queuestep policy.
+        Returns None if there is no active queuestep or the active queuestep has no
+        task to hand out.
         """
 
         active_queuestep = self.get_active_queuestep()
+        if active_queuestep is None:
+            return None
 
         return active_queuestep.get_next_task(user_id)
 

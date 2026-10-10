@@ -78,7 +78,7 @@ def test_get_dataset_by_id(client: TestClient):
 
 def test_create_records(client: TestClient):
     client.post("/datasets/", json=db_json)
-    response = client.post("/dataset/1/records", json=db_records)
+    response = client.post("/datasets/1/records/", json=db_records)
     assert response.status_code == 200
 
     response = client.get("/datasets/1")

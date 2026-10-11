@@ -12,12 +12,14 @@ To claim a slot, a person must:
    same item twice in a workflow);
 4. hold no other claim on this item.
 
-A person who released an item in a stage may claim it there again, but ``request_work``
-offers it to them last, after every other slot they may claim (``offered_last``). Without
-that, a release would hand the same slot straight back, at the front of the default order.
+The default order offers slots of later-listed stages first (so items finish), then the
+oldest admitted item, then the slot's index. A person who released an item in a stage may
+claim it there again, but ``request_work`` offers it to them last, after every other slot
+they may claim (``offered_last``). Without that, a release would hand the same slot
+straight back, at the front of the default order.
 
 A pause (see ``queries.blocking_pauses``) is not a matter of eligibility: it stops everyone's
-claims in a stage, so the engine checks it separately.
+claims in a stage. ``next_slot`` leaves paused stages out; ``claim`` checks it separately.
 """
 
 from __future__ import annotations
@@ -25,7 +27,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
-from labelflow.engine.queries import and_list, held_roles
+from labelflow.engine.config import WorkflowConfig, and_list
+from labelflow.engine.queries import active_pause, held_roles
 from labelflow.engine.tables import Row, Tables
 
 
@@ -79,3 +82,45 @@ def offered_last(person: Person, slot: Row) -> bool:
     """Whether the person released this item in this stage before, so that ``request_work``
     offers the slot to them only after all their other work."""
     return (slot["stage"], slot["item"]) in person.released
+
+
+def next_slot(
+    tables: Tables, workflow: str, config: WorkflowConfig, person: Person
+) -> tuple[Row, str] | None:
+    """The open slot to hand the person next, with how it was chosen; None when there is
+    none they may claim (or the workflow is paused)."""
+    if not person.roles or active_pause(tables, workflow) is not None:
+        return None
+    position = {
+        stage.name: i
+        for i, stage in enumerate(config.stages)
+        if active_pause(tables, workflow, stage.name) is None
+    }
+    candidates = [
+        slot
+        for slot in tables.select("slots", workflow=workflow, status="open")
+        if slot["stage"] in position
+        and why_not(person, slot, config.stage(slot["stage"]).roles) is None
+    ]
+    if not candidates:
+        return None
+    chosen = min(
+        candidates,
+        key=lambda s: (
+            offered_last(person, s),
+            -position[s["stage"]],
+            s["admitted_seq"],
+            s["index"],
+            s["slot"],
+        ),
+    )
+    how = (
+        "asked for work; first eligible open slot in the default order (later stages "
+        "first, then the oldest admitted item)"
+    )
+    if offered_last(person, chosen):
+        how += (
+            f"; {person.user} released this item in {chosen['stage']} before, so it was "
+            "offered only after their other work"
+        )
+    return chosen, how

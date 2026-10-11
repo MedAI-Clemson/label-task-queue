@@ -1,0 +1,133 @@
+{
+ "slot": {
+  "slot": 17,
+  "workflow": "review_sample",
+  "stage": "review",
+  "item": "img-0042",
+  "index": 1,
+  "status": "claimed",
+  "reserved_for": null,
+  "claimed_by": "reviewer-1",
+  "claimed_at": "2026-10-11T11:42:49.502132+00:00",
+  "label": null,
+  "config_version": 1
+ },
+ "packet": {
+  "workflow": "review_sample",
+  "slot": 17,
+  "stage": "review",
+  "item": "img-0042",
+  "uri": "xray_512.png",
+  "content_hash": "sha256:a6a6b006a56aeac217afb439518f655491df9dcd99fed9415a58edbc1647ae62",
+  "show_prior": true,
+  "prior_labels": [
+   {
+    "label": 101,
+    "stage": "label",
+    "value": {
+     "classifications": {
+      "view": "PA",
+      "quality": "good"
+     },
+     "masks": {
+      "lung": {
+       "size": [
+        512,
+        512
+       ],
+       "counts": "cgh1k0i>h0\\O`0A>D:F:G8H8I6I8I6J6K4K6K4K6K4L4L4L4L4L4M2M4M2M4M2M4M2N2N2M4M2N2N2N2N2N2O0O2N2N2O0O2N2O0O2O0O2O000O2O000O2O0000000000000000000000000001N10001N10001N101N101N2N101N2N101N2N2N2N2N2N2N2N3L3N2N2N3L3N3L3N3L4L4L4L4L4L4L4L5J5L5J6J6J6J7H7J8F9H:D<D=Bc0XO\\`d00d_[Oh0]O>C<D<F8G:H6I8I6J6J6J6K4K6K4L4L4L4L4L4L4L4M2M4M2M4M2N2N2M4M2N2N2N2N2N2N2N2O0O2N2O0O2N2O0O2O0O2O000O2O000O2O0000000000000000000000000001N10001N10001N101N101N2N101N2N2N101N2N2N2N2N2N3L3N2N2N3L3N3L3N3L3N3L4L4L4L4L4L5J5L5J5L5J6J7H7J7H8H9F:F<B?@d0XOihg1"
+      },
+      "effusion": {
+       "size": [
+        512,
+        512
+       ],
+       "counts": "R[j4:c?5M3L4M2N2N2N2N2N2O0O2N101N2O0O2O0O101O0O2O000O101O000O101O00000000000O10000000000000000001O00000000000O2O0000001N10001N10001N101N101N101N1O2O1N2N1O2N3M2N2N3L4L6Hodl1"
+      }
+     }
+    }
+   }
+  ],
+  "consensus": {
+   "stage": "label",
+   "label_ids": [
+    101,
+    102
+   ],
+   "agreed": false,
+   "rule_version": "ontology-consensus@1",
+   "detail": {
+    "classifications": {
+     "view": {
+      "agreed": true,
+      "values": [
+       "PA",
+       "PA"
+      ]
+     },
+     "quality": {
+      "agreed": false,
+      "values": [
+       "good",
+       "poor"
+      ]
+     }
+    },
+    "masks": {
+     "lung": {
+      "agreed": true,
+      "threshold": 0.8,
+      "min_iou": 0.91,
+      "pairwise_iou": [
+       [
+        0,
+        1,
+        0.91
+       ]
+      ],
+      "sizes": [
+       [
+        512,
+        512
+       ],
+       [
+        512,
+        512
+       ]
+      ]
+     },
+     "effusion": {
+      "agreed": false,
+      "threshold": 0.5,
+      "min_iou": 0.31,
+      "pairwise_iou": [
+       [
+        0,
+        1,
+        0.31
+       ]
+      ],
+      "sizes": [
+       [
+        512,
+        512
+       ],
+       [
+        512,
+        512
+       ]
+      ]
+     }
+    }
+   }
+  }
+ },
+ "shown": {
+  "content_hash": "sha256:a6a6b006a56aeac217afb439518f655491df9dcd99fed9415a58edbc1647ae62",
+  "prior_label_ids": [
+   101
+  ],
+  "show_prior": true,
+  "consensus_rule_version": "ontology-consensus@1"
+ }
+}

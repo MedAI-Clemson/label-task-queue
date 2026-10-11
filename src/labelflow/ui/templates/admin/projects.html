@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Projects · label-task-queue{% endblock %}
+{% block content %}
+<h1>Projects</h1>
+<section class="card">
+  <h2>Create a project</h2>
+  <form method="post" action="{{ root }}/admin/projects" class="row">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label for="project-name">Name</label>
+    <input id="project-name" name="name" required pattern="[A-Za-z][A-Za-z0-9_]*" aria-describedby="project-hint">
+    <button type="submit">Create</button>
+  </form>
+  <p id="project-hint" class="muted">Letters, digits and underscores, starting with a letter.</p>
+</section>
+<section class="card">
+  <h2>All projects</h2>
+  {% if not projects %}<p class="muted">No project yet.</p>{% endif %}
+  <ul class="plain">
+  {% for p in projects %}
+    <li><a href="{{ root }}/admin/projects/{{ p.name }}">{{ p.name }}</a> <span class="muted">created by {{ p.created_by }} on {{ p.created_at.strftime("%Y-%m-%d") }}</span></li>
+  {% endfor %}
+  </ul>
+</section>
+{% endblock %}

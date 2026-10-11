@@ -1,8 +1,10 @@
 """What every endpoint needs: the runtime, who is asking, and which project they mean.
 
 ``current_user`` accepts the login token as an ``Authorization: Bearer`` header or as the
-login cookie (the header wins when both are sent). Admins administer every project; a labeler
-uses the labeler endpoints, and the engine decides what work they may claim.
+login cookie (the header wins when both are sent). Admins administer every project. Anyone
+else reaches a project only while they hold a role in it; a project they hold none in is
+"not found" to them, exactly like a project that does not exist, so the answer never says
+which projects there are. Inside a project, the engine decides what work they may claim.
 """
 
 from __future__ import annotations
@@ -10,12 +12,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Annotated
 
-import sqlalchemy as sa
 from fastapi import Depends, Request
 from fastapi.security import APIKeyCookie, HTTPAuthorizationCredentials, HTTPBearer
 
 from labelflow.api.errors import Forbidden, NotLoggedIn
 from labelflow.api.identity import Principal
+from labelflow.api.projects import unknown_project
 from labelflow.api.runtime import Runtime
 from labelflow.engine import Engine
 
@@ -47,18 +49,20 @@ def session_token(
 
 
 def current_user(
+    request: Request,
     token: Annotated[str | None, Depends(session_token)],
     runtime: Annotated[Runtime, Depends(get_runtime)],
 ) -> Principal:
     principal = runtime.identity.authenticate(token)
-    if principal is not None:
-        return principal
-    if token is None:
-        raise NotLoggedIn("You are not logged in. Log in with POST /auth/login.")
-    raise NotLoggedIn(
-        "This login is not valid any more: it has expired, or the account was deactivated. "
-        "Log in again."
-    )
+    if principal is None:
+        if token is None:
+            raise NotLoggedIn("You are not logged in. Log in with POST /auth/login.")
+        raise NotLoggedIn(
+            "This login is not valid any more: it has expired, or the account was deactivated. "
+            "Log in again."
+        )
+    request.state.user = principal  # the error handlers word some answers by who asks
+    return principal
 
 
 def admin_user(user: Annotated[Principal, Depends(current_user)]) -> Principal:
@@ -74,7 +78,6 @@ class ProjectContext:
     name: str
     engine: Engine
     user: Principal
-    db: sa.Engine
 
     @property
     def actor(self) -> str:
@@ -82,17 +85,18 @@ class ProjectContext:
         return self.user.user_id
 
 
-def _project(runtime: Runtime, name: str, user: Principal) -> ProjectContext:
-    runtime.projects.require(name)
-    return ProjectContext(name, runtime.engine_for(name), user, runtime.db)
-
-
 def project_for_user(
     project: str,
     user: Annotated[Principal, Depends(current_user)],
     runtime: Annotated[Runtime, Depends(get_runtime)],
 ) -> ProjectContext:
-    return _project(runtime, project, user)
+    """The project, for someone who administers it, holds a role in it, or still holds a
+    claim there (a claim outlives a role change, so its holder may finish it)."""
+    runtime.projects.require(project)
+    engine = runtime.engine_for(project)
+    if not (user.is_admin or engine.user_roles(user.user_id) or engine.holds_a_claim(user.user_id)):
+        raise unknown_project(project)
+    return ProjectContext(project, engine, user)
 
 
 def project_for_admin(
@@ -100,7 +104,8 @@ def project_for_admin(
     user: Annotated[Principal, Depends(admin_user)],
     runtime: Annotated[Runtime, Depends(get_runtime)],
 ) -> ProjectContext:
-    return _project(runtime, project, user)
+    runtime.projects.require(project)
+    return ProjectContext(project, runtime.engine_for(project), user)
 
 
 RuntimeDep = Annotated[Runtime, Depends(get_runtime)]

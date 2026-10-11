@@ -1,0 +1,10 @@
+{% if preview is none %}
+<p class="muted">Paste the whole new config to preview the edit.</p>
+{% else %}
+<p class="{{ 'ok' if preview.ok else 'bad' }}" id="preview-summary">
+  {% if preview.ok %}This edit can be activated as version {{ preview.new_version }}.{% else %}This edit cannot be activated as it is.{% endif %}
+</p>
+{% if preview.errors %}<ol class="problems">{% for e in preview.errors %}<li>{{ e }}</li>{% endfor %}</ol>{% endif %}
+{% if preview.warnings %}<ol class="warnings">{% for w in preview.warnings %}<li>{{ w }}</li>{% endfor %}</ol>{% endif %}
+<pre class="report">{{ text }}</pre>
+{% endif %}

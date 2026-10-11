@@ -23,8 +23,8 @@ from typing import Any
 import yaml
 from pydantic import ValidationError
 
-from labelflow.engine.config.graph import ConfigGraphError, check_graph
-from labelflow.engine.config.models import Stage, WorkflowConfig
+from labelflow.engine.config.graph import ConfigGraphError, check_graph, parallel_stages
+from labelflow.engine.config.models import LabelsFraction, Stage, WorkflowConfig
 from labelflow.engine.config.problems import (
     Problem,
     describe,
@@ -365,8 +365,11 @@ def role_warnings(config: WorkflowConfig, roles: Mapping[str, Collection[str]]) 
 
     ``roles`` maps each role to the ids of the people holding it now. A stage needs as many
     different people as its ``labels_per_item`` (the ``count``, for ``{count, fraction}``),
-    or at least one person for ``all``. Stages naming a role that does not exist are
-    skipped: that is an error, which ``validate_config`` reports.
+    or at least one person for ``all``. Two stages that can hold the same item at the same
+    time and share a role need, between them, the sum of their counts: nobody labels an
+    item twice, so the people who label it in one stage cannot label it in the other.
+    Stages naming a role that does not exist are skipped: that is an error, which
+    ``validate_config`` reports.
     """
     warnings = []
     for position, stage in enumerate(config.stages, start=1):
@@ -376,7 +379,67 @@ def role_warnings(config: WorkflowConfig, roles: Mapping[str, Collection[str]]) 
         message = _role_shortage(stage, len(holders))
         if message:
             warnings.append(Problem(stage_where(stage.name, position), message))
+    return warnings + _parallel_shortages(config, roles)
+
+
+def _parallel_shortages(
+    config: WorkflowConfig, roles: Mapping[str, Collection[str]]
+) -> list[Problem]:
+    """Warnings for parallel stages that share a role and together need more people than hold it.
+
+    Only pairs are counted (three or more stages at once could still be short), and only the
+    people holding any role of either stage, so a warning here is never a false alarm.
+    """
+    positions = {stage.name: position for position, stage in enumerate(config.stages, start=1)}
+    warnings = []
+    for first_name, second_name in parallel_stages(config.model_dump()):
+        first, second = config.stage(first_name), config.stage(second_name)
+        shared = [role for role in first.roles if role in second.roles]
+        every_role = dict.fromkeys(first.roles + second.roles)
+        if not shared or any(role not in roles for role in every_role):
+            continue
+        needed = [_labels_needed(stage) for stage in (first, second)]
+        if None in needed:
+            continue  # `all` in parallel with a shared role is an error, reported elsewhere
+        holders = {person for role in every_role for person in roles[role]}
+        total = sum(needed)
+        if not holders or len(holders) >= total:
+            continue  # nobody at all is already a warning on each stage
+        the_role = (
+            f"the role '{shared[0]}'" if len(shared) == 1 else f"the roles {quoted_list(shared)}"
+        )
+        what = the_role if len(every_role) == len(shared) else "any of their roles"
+        people = "1 person holds" if len(holders) == 1 else f"{len(holders)} people hold"
+        who = f"only {people} {what}"
+        warnings.append(
+            Problem(
+                stage_where(second.name, positions[second.name]),
+                f"Stages '{first.name}' and '{second.name}' can both hold the same item at the "
+                f"same time, and both are assigned to {the_role}. Together they need {total} "
+                f"different people for such an item ({_labels_wanted(first)} and "
+                f"{_labels_wanted(second)}), but {who}. Some items will wait for another "
+                f"person, because nobody labels the same item twice. Give {the_role} to more "
+                "people, or lower `labels_per_item`.",
+            )
+        )
     return warnings
+
+
+def _labels_needed(stage: Stage) -> int | None:
+    """The most different people an item admitted to the stage can need; None for ``all``."""
+    labels = stage.labels_per_item
+    if isinstance(labels, int):
+        return labels
+    if isinstance(labels, LabelsFraction):
+        return labels.count
+    return None
+
+
+def _labels_wanted(stage: Stage) -> str:
+    """``"2 for 'review'"``, or ``"up to 3 for 'review'"`` when that is for a fraction."""
+    labels = stage.labels_per_item
+    prefix = "up to " if isinstance(labels, LabelsFraction) else ""
+    return f"{prefix}{_labels_needed(stage)} for '{stage.name}'"
 
 
 def _role_shortage(stage: Stage, holders: int) -> str | None:

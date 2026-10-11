@@ -13,14 +13,14 @@ usually a small, local change.
 | # | Milestone | Status | Where |
 | --- | --- | --- | --- |
 | 0 | Scaffold | Done, except the `v0-prototype` tag (see below) | `pyproject.toml`, `.github/workflows/ci.yml` |
-| 0b | Interface spike | Not started. Mask tools are decided (brush and polygon); the spike picks the library | |
+| 0b | Interface spike | Done: plain Canvas 2D plus an owned mask module (no library rasterizes to the pixel grid); see [`interface-spike.md`](interface-spike.md) | `spikes/mask-tools/` |
 | 1 | Config | Done | `src/labelflow/engine/config/`, `schema/`, `examples/workflows/` |
 | 2 | Engine core | Done | `src/labelflow/engine/` |
 | 3 | Built-in label task | Done | `src/labelflow/labeltask/`, `examples/ontologies/` |
 | 4 | Storage | Done (SQLite only) | `src/labelflow/store/`, `alembic.ini` |
 | 5 | Versioning and edits | Done | `src/labelflow/engine/edits.py` |
 | 6 | API | Done (Docker image not built in CI) | `src/labelflow/api/` |
-| 7 | Interface | Not started: waits on 0b | |
+| 7 | Interface | Done; browser-tested end to end (see [`ui/README.md`](ui/README.md)) | `src/labelflow/ui/` |
 | 8 | Pilot | Not started | |
 
 **The prototype tag.** The prototype was removed on the Phase 1 branch. Its last commit
@@ -157,24 +157,47 @@ on `main` is `e77c9d0`. To tag it, run
     sent as a bearer header or as an HttpOnly, SameSite=lax cookie (for the server-rendered
     interface). Deactivating an account or resetting its password ends its logins.
     Passwords are hashed with the standard library's scrypt.
-31. **Proposed: hashing at import:** if an item comes without a content hash, the server hashes the
-    file. It does this only for a `file://` path inside `LABELFLOW_MEDIA_ROOT`, or for any
-    `file://` path when that setting is unset. Otherwise it asks for the hash. A batch
-    import is all or nothing.
+31. **Proposed: hashing at import, deny by default.** If an item comes without a content
+    hash, the server hashes the file only when it is a `file://` path inside
+    `LABELFLOW_MEDIA_ROOT`. Without that setting, every item must come with its hash. A
+    batch import is all or nothing.
 32. **Decided: a held claim survives a role change.** A person whose role is revoked can still submit
-    a slot they had already claimed, since they held the role at the moment of the claim.
-    Their next request for work follows the new roles.
+    a slot they had already claimed, since they held the role at the moment of the claim,
+    even if it was their last role in the project. Their next request for work follows the
+    new roles. Labels record the roles held at the claim (`roles_at_claim`) as well as at
+    submit.
 33. **Proposed: errors** are `{detail, problems}`. Unknown things give 404; conflicts (including a
     stale base version for an edit, and claiming in a paused stage) give 409; "not yours" and "not eligible" give 403;
     invalid input, labels, configs and refused edits give 422.
 
+## Hardening after review (Oct 11, 2026)
+
+A read-only review of the first merge found these, all now fixed:
+
+- **Mask sizes are bounded** (16384 pixels per side, 64 megapixels; an ontology may set a
+  lower `max_mask_pixels`). Sizes are checked before any mask is decoded, and agreement is
+  computed from the run lengths, so a tiny label claiming a huge mask cannot exhaust memory.
+- **Request sizes are bounded:** request bodies, labels, item properties and import batches
+  (see the `LABELFLOW_MAX_*` settings in the README).
+- **A config rule:** two stages that can hold the same item at the same time may not share
+  a role when either uses `labels_per_item: all`, since nobody labels an item twice and the
+  item would never finish. Staffing warnings count people across such stages.
+- **Reserved slots that can no longer be filled are cancelled** (logged) when their person
+  labels the item in another stage.
+- **An ontology edited under a running workflow** is refused with a plain message instead of
+  failing; a failing label task never leaves a half-done command.
+- **What the interface reports as shown** must match what the stage shows.
+- **Deactivating an account revokes its roles** in every project (logged).
+- **People without a role in a project** cannot see it exist, and get no name suggestions.
+
 ## Known follow-ups
 
-- The API reads some derived tables and the event log directly. The engine should offer
-  read methods for these, and a read-only transaction: today reads take the write lock,
-  which is fine at Phase 1 scale but serializes everything.
-- `Engine.import_items` (an atomic batch) would replace the API's loop.
-- Login rate limiting, account reactivation, and a form-encoded login for the interface.
+- Login rate limiting and account reactivation.
+- The interface's `shown` reports every earlier-label layer the work packet offered, not
+  which layers the reviewer actually toggled on. Decide whether toggles should be logged.
+- Mermaid diagrams load from a CDN in the admin pages (vendoring it is about 3 MB).
+- The home page's "work waiting" count reads engine internals; it should get an engine
+  read method.
 - Locating config problems by YAML line number. Today they are located by stage and key.
 
 ## The design notes' open questions, answered in review (Oct 11, 2026)

@@ -13,8 +13,11 @@ decides each final label, and records every one of those decisions in an append-
 log together with the rule that caused it. Nothing is decided by hand and nothing is decided
 silently.
 
-It is a Python package, `labelflow`, with a web API on top. The annotation interface is not
-built yet (see [status](#status)).
+It is a Python package, `labelflow`, with a web API and a browser interface on top: labelers
+draw masks with a brush or polygon and pick classifications; admins upload workflows, watch
+progress and download exports.
+
+![The labeling page](docs/ui/labeler.png)
 
 ## A workflow in twelve lines
 
@@ -153,14 +156,19 @@ python -m labelflow.api.admin create-admin root        # once; asks for a passwo
 ```
 
 `run.sh` runs `alembic upgrade head` first, keeps the database in `./db/`, and loads the
-label tasks from `examples/ontologies/`. The interactive API docs are at
+label tasks from `examples/ontologies/`. Open `http://localhost:8000/ui/` for the interface
+(see [`docs/ui/`](docs/ui/README.md)); the interactive API docs are at
 `http://localhost:8000/docs`. Settings are environment variables:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `DATABASE_URI` | `sqlite:///./db/labelflow.db` | The SQLite database. |
 | `LABELFLOW_LABEL_TASKS` | `./ontologies` (`run.sh`: `examples/ontologies`) | Folder of ontology files. |
-| `LABELFLOW_MEDIA_ROOT` | not set | Folder the server may read images from, to hash them at import. |
+| `LABELFLOW_MEDIA_ROOT` | not set | Folder the server may read images from, to hash them at import. Without it, every imported item must come with its `content_hash`. |
+| `LABELFLOW_MAX_REQUEST_MB` | `20` | Largest request body accepted. |
+| `LABELFLOW_MAX_LABEL_KB` | `4096` | Largest submitted label. |
+| `LABELFLOW_MAX_PROPERTIES_KB` | `256` | Largest `properties` of one imported item. |
+| `LABELFLOW_MAX_IMPORT_ITEMS` | `10000` | Most items in one import batch. |
 | `LABELFLOW_SESSION_HOURS` | `12` | How long a login lasts. |
 | `LABELFLOW_COOKIE_SECURE` | `false` | Set to `true` when the service is served over https. |
 | `LABELFLOW_ADMIN_PASSWORD` | not set | Lets `create-admin` run without a prompt. |
@@ -326,7 +334,7 @@ test suite, and on a deployment with
 | `src/labelflow/labeltask` | Label tasks: the built-in ontology label task, COCO RLE masks, the consensus check. |
 | `src/labelflow/store` | SQLite storage for the engine (SQLAlchemy 2), Alembic migrations, the rebuild command. |
 | `src/labelflow/api` | The web API (FastAPI): accounts and login, projects, roles, datasets, workflows, labeler and admin endpoints, exports. |
-| `src/labelflow/ui` | The annotation interface (not built yet). |
+| `src/labelflow/ui` | The browser interface: login, labeling with brush and polygon masks, review layers, admin pages. Server-rendered (Jinja2 + htmx). |
 | `examples/` | The runnable demo, the worked workflow files, and the chest X-ray ontology. |
 | `schema/` | The published JSON Schema of the config (`python -m labelflow.engine.config.schema` regenerates it). |
 | `docs/` | The design notes and implementation notes. |
@@ -347,7 +355,7 @@ their resolved form and diagrams.
 ## Status
 
 This is the Phase 1 rewrite. The engine, the built-in label task, SQLite storage, edits,
-and the API are done; the annotation interface and the pilot are not started.
+the API and the browser interface are done; the pilot on a real dataset is next.
 
 - [`docs/phase1-design-notes.md`](docs/phase1-design-notes.md): the design, and why.
 - [`docs/phase1-implementation-notes.md`](docs/phase1-implementation-notes.md): status by

@@ -6,6 +6,8 @@ from labelflow.engine import (
     AlreadyExists,
     Engine,
     InvalidRequest,
+    LabelTaskFailed,
+    NewItem,
     NotAllowed,
     UnknownDataset,
     UnknownLabelTaskRef,
@@ -91,8 +93,41 @@ def test_importing_into_a_running_workflow_admits_the_item(engine, cfg):
     engine.import_item("ds", "late", "file:///late.png", "sha-late", {"site": "B"}, "admin")
     entered = [e for e in engine.store.events() if e.type == "item_entered" and e.item == "late"]
     assert [e.workflow for e in entered] == ["wf", "other"]
-    assert "imported while the workflow runs" in entered[0].because
+    assert entered[0].because == "wf.dataset = ds; the item was imported while the workflow runs"
     assert engine.store.get("admissions", workflow="other", stage="annotate", item="late")
+
+
+def new_items(*ids: str) -> list[NewItem]:
+    return [NewItem(item=i, uri=f"file:///{i}.png", content_hash=f"sha-{i}") for i in ids]
+
+
+def test_import_items_adds_a_batch_in_order_into_every_running_workflow(engine, cfg):
+    engine.start_workflow(cfg(ONE_STAGE), 1, "admin")
+    assert engine.import_items("ds", new_items("b", "a"), "admin") == ["b", "a"]
+    imported = [e for e in engine.store.events() if e.type == "item_imported"]
+    assert [e.item for e in imported[-2:]] == ["b", "a"]
+    assert imported[-1].at == imported[-2].at  # one command, one timestamp
+    assert [e.item for e in engine.store.events(type="item_entered")][-2:] == ["b", "a"]
+    assert engine.dataset("ds").items == 6
+    assert engine.import_items("ds", [], "admin") == []
+
+
+@pytest.mark.parametrize(
+    ("ids", "error", "message"),
+    [
+        (("x", "img_001"), AlreadyExists, "already has an item 'img_001'"),
+        (("x", "y", "x"), InvalidRequest, "'x' is listed twice"),
+        (("x", ""), InvalidRequest, "item id is required"),
+    ],
+)
+def test_import_items_is_all_or_nothing(engine, cfg, ids, error, message):
+    engine.start_workflow(cfg(ONE_STAGE), 1, "admin")
+    events, state = engine.store.events(), engine.store.snapshot()
+    with pytest.raises(error, match=message):
+        engine.import_items("ds", new_items(*ids), "admin")
+    assert engine.store.events() == events and engine.store.snapshot() == state
+    with pytest.raises(UnknownDataset):
+        engine.import_items("nope", new_items("x"), "admin")
 
 
 @pytest.mark.parametrize(
@@ -160,7 +195,10 @@ def test_a_failing_command_leaves_no_trace(build, cfg):
         if user == "ana":
             engine.submit("wf", slot.slot, user, {"value": "a"}, packet.shown())
     before_events, before_state = engine.store.events(), engine.store.snapshot()
-    with pytest.raises(RuntimeError, match="crashed"):
+    # The crash becomes a refusal with a plain message (an EngineError, so the API answers
+    # with it rather than a 500), and the transaction rolls back: the claim is still held.
+    with pytest.raises(LabelTaskFailed, match="standin@1 failed while checking consensus"):
         engine.submit("wf", slot.slot, "ben", {"value": "a"}, packet.shown())
     assert engine.store.events() == before_events
     assert engine.store.snapshot() == before_state
+    assert engine.slot("wf", slot.slot).claimed_by == "ben"

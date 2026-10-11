@@ -18,6 +18,7 @@ from labelflow.api import app as module_app
 from labelflow.labeltask import OntologyError
 
 ROOT = Path(__file__).resolve().parents[2]
+KB, MB = 1024, 1024 * 1024
 
 
 def test_the_defaults():
@@ -27,6 +28,10 @@ def test_the_defaults():
     assert settings.media_root is None
     assert settings.session_lifetime == timedelta(hours=12)
     assert settings.cookie_secure is False
+    assert settings.max_request_bytes == 20 * MB
+    assert settings.max_import_items == 10_000
+    assert settings.max_properties_bytes == 256 * KB
+    assert settings.max_label_bytes == 4 * MB
     assert settings.sqlite_synchronous == "FULL"
     assert settings.password_cost == 14
 
@@ -39,6 +44,10 @@ def test_everything_can_be_set_from_the_environment():
             "LABELFLOW_MEDIA_ROOT": "/mnt/images",
             "LABELFLOW_SESSION_HOURS": "0.5",
             "LABELFLOW_COOKIE_SECURE": "Yes",
+            "LABELFLOW_MAX_REQUEST_MB": "5",
+            "LABELFLOW_MAX_IMPORT_ITEMS": "500",
+            "LABELFLOW_MAX_PROPERTIES_KB": "16",
+            "LABELFLOW_MAX_LABEL_KB": "1024",
             "LABELFLOW_SQLITE_SYNCHRONOUS": "NORMAL",
         }
     )
@@ -47,12 +56,21 @@ def test_everything_can_be_set_from_the_environment():
     assert settings.media_root == Path("/mnt/images")
     assert settings.session_lifetime == timedelta(minutes=30)
     assert settings.cookie_secure is True
+    assert settings.max_request_bytes == 5 * MB
+    assert settings.max_import_items == 500
+    assert settings.max_properties_bytes == 16 * KB
+    assert settings.max_label_bytes == 1 * MB
     assert settings.sqlite_synchronous == "NORMAL"
 
 
 def test_empty_values_mean_the_default():
     settings = Settings.from_env(
-        {"DATABASE_URI": " ", "LABELFLOW_MEDIA_ROOT": "", "LABELFLOW_SESSION_HOURS": ""}
+        {
+            "DATABASE_URI": " ",
+            "LABELFLOW_MEDIA_ROOT": "",
+            "LABELFLOW_SESSION_HOURS": "",
+            "LABELFLOW_MAX_REQUEST_MB": " ",
+        }
     )
     assert settings == Settings()
 
@@ -68,15 +86,32 @@ def test_a_bad_session_lifetime_is_refused(hours):
         Settings.from_env({"LABELFLOW_SESSION_HOURS": hours})
 
 
+@pytest.mark.parametrize(
+    "name",
+    [
+        "LABELFLOW_MAX_REQUEST_MB",
+        "LABELFLOW_MAX_IMPORT_ITEMS",
+        "LABELFLOW_MAX_PROPERTIES_KB",
+        "LABELFLOW_MAX_LABEL_KB",
+    ],
+)
+@pytest.mark.parametrize("value", ["0", "-1", "1.5", "lots"])
+def test_a_bad_limit_is_refused(name, value):
+    with pytest.raises(ValueError, match=f"{name} must be a positive whole number"):
+        Settings.from_env({name: value})
+
+
 def test_a_bad_flag_is_refused():
     with pytest.raises(ValueError, match="LABELFLOW_COOKIE_SECURE must be true or false"):
         Settings.from_env({"LABELFLOW_COOKIE_SECURE": "perhaps"})
     assert Settings.from_env({"LABELFLOW_COOKIE_SECURE": "off"}).cookie_secure is False
 
 
-def test_a_zero_lifetime_is_refused_when_building_settings_directly():
+def test_bad_values_are_refused_when_building_settings_directly():
     with pytest.raises(ValueError, match="positive number of hours"):
         Settings(session_hours=0)
+    with pytest.raises(ValueError, match="max_label_bytes must be a positive number"):
+        Settings(max_label_bytes=0)
 
 
 def test_the_module_level_app_is_the_one_uvicorn_serves():

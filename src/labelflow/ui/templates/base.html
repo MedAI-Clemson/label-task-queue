@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}label-task-queue{% endblock %}</title>
+<meta name="csrf-token" content="{{ csrf }}">
+<link rel="stylesheet" href="{{ root }}/static/ui.css">
+<script src="{{ root }}/static/vendor/htmx.min.js" defer></script>
+{% block head %}{% endblock %}
+</head>
+<body class="{% block bodyclass %}{% endblock %}" hx-headers='{"X-Requested-With": "htmx"}'>
+<a class="skip" href="#main">Skip to content</a>
+<header class="topbar">
+  <nav aria-label="Main">
+    <a class="brand" href="{{ root }}/">label-task-queue</a>
+    {% if user %}
+      <a href="{{ root }}/">Home</a>
+      {% if user.is_admin %}
+        <a href="{{ root }}/admin/projects">Projects</a>
+        <a href="{{ root }}/admin/accounts">Accounts</a>
+      {% endif %}
+    {% endif %}
+  </nav>
+  {% if user %}
+  <form class="inline" method="post" action="{{ root }}/logout">
+    <span class="who">{{ user.display_name }}{% if user.is_admin %} (admin){% endif %}</span>
+    <button type="submit">Log out</button>
+  </form>
+  {% endif %}
+</header>
+<main id="main" class="{% block mainclass %}page{% endblock %}">
+  {% if flash %}<p class="flash {{ flash.kind }}" role="status">{{ flash.text }}</p>{% endif %}
+  {% if error %}
+  <div class="problem" role="alert">
+    <p>{{ error }}</p>
+    {% if problems %}<ul>{% for p in problems %}<li>{{ p }}</li>{% endfor %}</ul>{% endif %}
+  </div>
+  {% endif %}
+  {% block content %}{% endblock %}
+</main>
+{% block scripts %}{% endblock %}
+</body>
+</html>

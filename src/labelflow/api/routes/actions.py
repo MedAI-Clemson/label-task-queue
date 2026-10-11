@@ -6,10 +6,9 @@ from __future__ import annotations
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
-from labelflow.api import reads
 from labelflow.api.deps import AdminProject
 from labelflow.api.errors import errors
-from labelflow.api.routes.workflows import PauseOut
+from labelflow.engine import PauseState
 
 router = APIRouter(
     prefix="/projects/{project}/workflows/{workflow}",
@@ -62,76 +61,50 @@ def cancel_open_slots(workflow: str, stage: str, body: ReasonIn, ctx: AdminProje
     return CancelOut(stage=stage, cancelled_slots=cancelled)
 
 
-class StagePauseOut(BaseModel):
-    stage: str = Field(description="The stage's name.")
-    paused: bool = Field(description="Whether the stage is paused on its own.")
-    pause: PauseOut | None = Field(description="Who paused the stage, when and why, if paused.")
-
-
-class PausesOut(BaseModel):
-    workflow: str = Field(description="The workflow's name.")
-    paused: bool = Field(description="Whether the whole workflow is paused.")
-    pause: PauseOut | None = Field(description="Who paused the workflow, when and why, if paused.")
-    stages: list[StagePauseOut] = Field(
-        description="Each stage of the config in force, with its own pause state. A stage's "
-        "slots can be claimed only when neither it nor the workflow is paused."
-    )
-
-
-def _pauses(ctx: AdminProject, workflow: str) -> PausesOut:
-    return PausesOut(**reads.pauses(ctx.engine.store, workflow))
-
-
 @router.post(
-    "/pause",
-    response_model=PausesOut,
-    summary="Pause a whole workflow",
-    responses=errors(409),
+    "/pause", response_model=PauseState, summary="Pause a whole workflow", responses=errors(409)
 )
-def pause_workflow(workflow: str, body: ReasonIn, ctx: AdminProject) -> PausesOut:
+def pause_workflow(workflow: str, body: ReasonIn, ctx: AdminProject) -> PauseState:
     """Stop all claims in the workflow until it is resumed. Only claims stop: new items are
     still admitted and their slots wait, claims already held can still be submitted or given
     back, and items still move on and get their final labels. Pausing a paused workflow is
     refused (409)."""
     ctx.engine.pause_workflow(workflow, ctx.actor, body.reason)
-    return _pauses(ctx, workflow)
+    return ctx.engine.pauses(workflow)
 
 
 @router.post(
-    "/resume",
-    response_model=PausesOut,
-    summary="Resume a paused workflow",
-    responses=errors(409),
+    "/resume", response_model=PauseState, summary="Resume a paused workflow", responses=errors(409)
 )
-def resume_workflow(workflow: str, body: ReasonIn, ctx: AdminProject) -> PausesOut:
+def resume_workflow(workflow: str, body: ReasonIn, ctx: AdminProject) -> PauseState:
     """Allow claims in the workflow again. Stages that were paused on their own stay paused.
     Resuming a workflow that is not paused is refused (409)."""
     ctx.engine.resume_workflow(workflow, ctx.actor, body.reason)
-    return _pauses(ctx, workflow)
+    return ctx.engine.pauses(workflow)
 
 
 @router.post(
     "/stages/{stage}/pause",
-    response_model=PausesOut,
+    response_model=PauseState,
     summary="Pause a stage",
     responses=errors(409),
 )
-def pause_stage(workflow: str, stage: str, body: ReasonIn, ctx: AdminProject) -> PausesOut:
+def pause_stage(workflow: str, stage: str, body: ReasonIn, ctx: AdminProject) -> PauseState:
     """Stop claims in one stage until it is resumed; other stages go on. Only claims stop, as
     for a paused workflow, and the pause stays in force through later edits of the config.
     Pausing a paused stage is refused (409)."""
     ctx.engine.pause_stage(workflow, stage, ctx.actor, body.reason)
-    return _pauses(ctx, workflow)
+    return ctx.engine.pauses(workflow)
 
 
 @router.post(
     "/stages/{stage}/resume",
-    response_model=PausesOut,
+    response_model=PauseState,
     summary="Resume a paused stage",
     responses=errors(409),
 )
-def resume_stage(workflow: str, stage: str, body: ReasonIn, ctx: AdminProject) -> PausesOut:
+def resume_stage(workflow: str, stage: str, body: ReasonIn, ctx: AdminProject) -> PauseState:
     """Allow claims in a paused stage again, unless the whole workflow is paused. Resuming a
     stage that is not paused is refused (409)."""
     ctx.engine.resume_stage(workflow, stage, ctx.actor, body.reason)
-    return _pauses(ctx, workflow)
+    return ctx.engine.pauses(workflow)

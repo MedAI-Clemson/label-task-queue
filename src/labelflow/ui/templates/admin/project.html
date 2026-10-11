@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block title %}Project {{ project }} · label-task-queue{% endblock %}
+{% block content %}
+<p class="crumbs"><a href="{{ root }}/admin/projects">Projects</a></p>
+<h1>Project {{ project }}</h1>
+{% if staffing %}
+<div class="problem warn" role="status">
+  <p>Staffing warnings:</p>
+  <ul>{% for w in staffing %}<li>{{ w }}</li>{% endfor %}</ul>
+</div>
+{% endif %}
+
+<section class="card" id="roles">
+  <h2>Roles</h2>
+  <p class="muted">Roles are shared by every workflow of the project. A stage names the roles whose holders may claim its slots; every change here is logged with its reason.</p>
+  {% if roles %}
+  <table class="list">
+    <thead><tr><th>Role</th><th>Held by</th><th>Change</th></tr></thead>
+    <tbody>
+    {% for role in roles %}
+      <tr>
+        <td>{{ role.role }}</td>
+        <td>{{ role.holders | join(", ") or "nobody" }}</td>
+        <td class="actions">
+          <form class="inline" method="post" action="{{ root }}/admin/projects/{{ project }}/roles/{{ role.role }}/grant">
+            <input type="hidden" name="csrf" value="{{ csrf }}">
+            <label class="sr-only" for="grant-user-{{ role.role }}">Give {{ role.role }} to</label>
+            <select id="grant-user-{{ role.role }}" name="user" required>
+              <option value="">give to…</option>
+              {% for a in accounts if a.user_id not in role.holders %}<option value="{{ a.user_id }}">{{ a.user_id }}</option>{% endfor %}
+            </select>
+            <label class="sr-only" for="grant-reason-{{ role.role }}">Reason</label>
+            <input id="grant-reason-{{ role.role }}" name="reason" placeholder="reason" required>
+            <button type="submit">Grant</button>
+          </form>
+          {% if role.holders %}
+          <form class="inline" method="post" action="{{ root }}/admin/projects/{{ project }}/roles/{{ role.role }}/revoke">
+            <input type="hidden" name="csrf" value="{{ csrf }}">
+            <label class="sr-only" for="revoke-user-{{ role.role }}">Take {{ role.role }} from</label>
+            <select id="revoke-user-{{ role.role }}" name="user" required>
+              <option value="">take from…</option>
+              {% for h in role.holders %}<option value="{{ h }}">{{ h }}</option>{% endfor %}
+            </select>
+            <label class="sr-only" for="revoke-reason-{{ role.role }}">Reason</label>
+            <input id="revoke-reason-{{ role.role }}" name="reason" placeholder="reason" required>
+            <button type="submit">Revoke</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<p class="muted">No role defined yet.</p>{% endif %}
+  <form method="post" action="{{ root }}/admin/projects/{{ project }}/roles" class="row">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label for="new-role">Define a role</label>
+    <input id="new-role" name="role" required pattern="[A-Za-z][A-Za-z0-9_]*">
+    <button type="submit">Define</button>
+  </form>
+</section>
+
+<section class="card" id="datasets">
+  <h2>Datasets</h2>
+  {% if datasets %}
+  <ul class="plain">
+  {% for d in datasets %}
+    <li><a href="{{ root }}/admin/projects/{{ project }}/datasets/{{ d.dataset }}">{{ d.dataset }}</a> <span class="muted">{{ d.items }} item{{ "" if d.items == 1 else "s" }}</span></li>
+  {% endfor %}
+  </ul>
+  {% else %}<p class="muted">No dataset yet.</p>{% endif %}
+  <form method="post" action="{{ root }}/admin/projects/{{ project }}/datasets" class="row">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label for="new-dataset">Create a dataset</label>
+    <input id="new-dataset" name="name" required pattern="[A-Za-z][A-Za-z0-9_]*">
+    <button type="submit">Create</button>
+  </form>
+</section>
+
+<section class="card" id="workflows">
+  <h2>Workflows</h2>
+  {% if workflows %}
+  <table class="list">
+    <thead><tr><th>Workflow</th><th>Dataset</th><th>Stages</th><th>State</th></tr></thead>
+    <tbody>
+    {% for w in workflows %}
+      <tr>
+        <td><a href="{{ root }}/admin/projects/{{ project }}/workflows/{{ w.workflow }}">{{ w.workflow }}</a></td>
+        <td>{{ w.dataset }}</td>
+        <td>{% for s in w.stages %}{{ s.name }} ({{ s.roles | join(", ") }}){{ ", " if not loop.last }}{% endfor %}</td>
+        <td>{{ "paused" if w.paused else w.status }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<p class="muted">No workflow yet.</p>{% endif %}
+  <p><a class="button" href="{{ root }}/admin/projects/{{ project }}/workflows/new">Start a workflow</a></p>
+</section>
+{% endblock %}

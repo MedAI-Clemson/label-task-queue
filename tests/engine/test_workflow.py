@@ -237,6 +237,36 @@ def test_roles_are_checked_at_the_moment_of_the_claim(build, cfg):
     assert engine.request_work("wf", "dr_smith").stage == "annotate"
 
 
+def test_a_label_records_the_roles_held_at_the_claim(build, cfg):
+    """A held claim survives a role change, and the label says which roles made the
+    labeler eligible: the ones held at the claim, not the ones left at the submit."""
+    engine = build(cfg(ANNOTATE))
+    slot = engine.request_work("wf", "ana")
+    assert engine.store.get("slots", slot=slot.slot)["claimed_roles"] == ["annotator"]
+    engine.revoke_role("ana", "annotator", "admin", "on leave")
+    packet = engine.work_packet("wf", slot.slot, "ana")
+    label_id = engine.submit("wf", slot.slot, "ana", {"value": "cat"}, packet.shown())
+    row = engine.store.get("labels", label=label_id)
+    assert (row["roles_at_claim"], row["roles"]) == (["annotator"], [])
+    assert engine.store.get("slots", slot=slot.slot)["claimed_roles"] == ["annotator"]
+    exported = engine.export_labels("wf")[0]
+    assert (exported["roles_at_claim"], exported["roles"]) == ('["annotator"]', "[]")
+    assert rebuild(engine.store.events()).snapshot() == engine.store.snapshot()
+
+
+def test_claimed_roles_follow_the_claim(build, cfg):
+    grants = {"ana": ("annotator",), "ben": ("annotator", "expert")}
+    engine = build(cfg(ANNOTATE), items=2, grants=grants)
+    slot = engine.request_work("wf", "ana")
+    engine.release("wf", slot.slot, "ana", "later")
+    assert engine.store.get("slots", slot=slot.slot)["claimed_roles"] is None
+    engine.claim("wf", slot.slot, "ben")
+    assert engine.store.get("slots", slot=slot.slot)["claimed_roles"] == ["annotator", "expert"]
+    engine.exclude_item("wf", slot.item, "admin", "unreadable")
+    assert engine.store.get("slots", slot=slot.slot)["claimed_roles"] is None
+    assert rebuild(engine.store.events()).snapshot() == engine.store.snapshot()
+
+
 def test_claim_a_particular_slot(build, cfg, work):
     engine = build(cfg(DOUBLE), items=2)
     slot = engine.claim("wf", 3, "ana")
@@ -289,6 +319,55 @@ def test_blind_stage_shows_nothing_earlier(build, cfg, work):
     assert packet.prior_labels == () and packet.consensus is None and not packet.show_prior
     shown = packet.shown().model_copy(update={"prior_label_ids": (1,), "show_prior": True})
     with pytest.raises(InvalidShown, match="blind"):
+        engine.submit("wf", slot.slot, "dr_smith", {"value": "cat"}, shown)
+    # Claiming to have been offered earlier labels, even without naming any, is refused too.
+    with pytest.raises(InvalidShown, match=r"blind .* but the interface reports show_prior: true"):
+        engine.submit(
+            "wf",
+            slot.slot,
+            "dr_smith",
+            {"value": "cat"},
+            packet.shown().model_copy(update={"show_prior": True}),
+        )
+
+
+def test_labels_of_the_same_stage_cannot_have_been_shown(build, cfg, work):
+    engine = build(cfg(DOUBLE), items=1)
+    _, first = work(engine, "wf", "ana", "cat")
+    slot = engine.request_work("wf", "ben")
+    packet = engine.work_packet("wf", slot.slot, "ben")
+    assert packet.show_prior and packet.prior_labels == ()  # the packet never shows them
+    shown = packet.shown().model_copy(update={"prior_label_ids": (first,)})
+    with pytest.raises(InvalidShown, match="Label\\(s\\) 1 are labels of annotate itself"):
+        engine.submit("wf", slot.slot, "ben", {"value": "dog"}, shown)
+    assert engine.slot("wf", slot.slot).claimed_by == "ben"
+
+
+def test_an_edit_that_shows_earlier_labels_after_the_claim_accepts_either_report(build, cfg, work):
+    """The packet may be fetched on either side of the edit, so both reports are honest."""
+    blind = {"name": "review", "input": "annotate", "assign_to": "expert", "show_prior": False}
+    shows = {**blind, "show_prior": True}
+    engine = build(cfg(ANNOTATE, blind, final=["review", "annotate"]), items=3)
+    for _ in range(3):
+        work(engine, "wf", "ana")  # labels 1, 2 and 3 on img_001, img_002 and img_003
+    smith = engine.request_work("wf", "dr_smith")  # img_001, claimed while the stage is blind
+    jones = engine.request_work("wf", "dr_jones")  # img_002, likewise
+    before = engine.work_packet("wf", jones.slot, "dr_jones")
+    assert not before.show_prior
+    engine.activate_edit("wf", cfg(ANNOTATE, shows, final=["review", "annotate"]), "admin", 1)
+    after = engine.work_packet("wf", smith.slot, "dr_smith")
+    assert after.show_prior and [p.label for p in after.prior_labels] == [1]
+    with pytest.raises(InvalidShown, match="not labels of item img_001"):
+        shown = after.shown().model_copy(update={"prior_label_ids": (2,)})
+        engine.submit("wf", smith.slot, "dr_smith", {"value": "cat"}, shown)
+    engine.submit("wf", smith.slot, "dr_smith", {"value": "cat"}, after.shown())
+    engine.submit("wf", jones.slot, "dr_jones", {"value": "cat"}, before.shown())
+    assert [r["show_prior"] for r in engine.store.select("labels", stage="review")] == [True, False]
+    # A slot claimed after the edit was only ever offered earlier labels.
+    slot = engine.request_work("wf", "dr_smith")
+    packet = engine.work_packet("wf", slot.slot, "dr_smith")
+    with pytest.raises(InvalidShown, match=r"offers earlier labels .* reports show_prior: false"):
+        shown = packet.shown().model_copy(update={"show_prior": False, "prior_label_ids": ()})
         engine.submit("wf", slot.slot, "dr_smith", {"value": "cat"}, shown)
 
 
@@ -353,6 +432,7 @@ def test_an_invalid_label_is_rejected_without_an_event(build, cfg, label, proble
         ({"content_hash": "sha-999", "show_prior": True}, "has content hash sha-001"),
         ({"content_hash": "sha-001", "show_prior": True, "prior_label_ids": [2]}, "not labels"),
         ({"content_hash": "sha-001", "show_prior": False, "prior_label_ids": [1]}, "show_prior"),
+        ({"content_hash": "sha-001", "show_prior": False}, "reports show_prior: false"),
         (
             {"content_hash": "sha-001", "show_prior": True, "consensus_rule_version": "x@1"},
             "No consensus check",
@@ -654,4 +734,78 @@ def test_state_rebuilds_after_every_kind_of_command(build, cfg, work):
     engine.exclude_item("wf", "img_003", "admin", "blurry")
     engine.cancel_open_slots("wf", "annotate", "admin", "stop")
     work(engine, "wf", "dr_smith", "cat")
+    assert rebuild(engine.store.events()).snapshot() == engine.store.snapshot()
+
+
+# --- reserved slots that a label elsewhere strands ----------------------------------------
+
+
+def test_a_submit_cancels_slots_elsewhere_reserved_for_the_labeler(build, cfg):
+    """Parallel stages ``annotate`` (annotator) and ``panel`` (every expert). Cy holds both
+    roles, so the panel reserves a slot for them; once Cy labels the item in annotate they can
+    never fill it (nobody labels an item twice), so the workflow cancels it and the panel
+    completes with the labels it has."""
+    panel = {"name": "panel", "assign_to": "expert", "labels_per_item": "all"}
+    grants = {"ana": ("annotator",), "cy": ("annotator", "expert"), "dr_smith": ("expert",)}
+    engine = build(cfg(ANNOTATE, panel, final=["panel", "annotate"]), items=1, grants=grants)
+    reserved = {s["reserved_for"]: s["slot"] for s in engine.store.select("slots", stage="panel")}
+    assert set(reserved) == {"cy", "dr_smith"}
+    annotate_slot = engine.store.select("slots", stage="annotate")[0]["slot"]
+    engine.claim("wf", annotate_slot, "cy")
+    packet = engine.work_packet("wf", annotate_slot, "cy")
+    engine.submit("wf", annotate_slot, "cy", {"value": "cat"}, packet.shown())
+    cancelled = engine.store.get("slots", slot=reserved["cy"])
+    assert cancelled["status"] == "cancelled" and cancelled["claimed_roles"] is None
+    assert engine.store.get("slots", slot=reserved["dr_smith"])["status"] == "open"
+    event = next(e for e in engine.store.events(type="slots_cancelled"))
+    assert (event.actor, event.stage, event.item, event.slots) == (
+        None,
+        "panel",
+        "img_001",
+        (reserved["cy"],),
+    )
+    assert event.reason == "reserved for cy, who labeled this item in annotate"
+    assert event.because == (
+        f"panel.labels_per_item = all reserved slot(s) {reserved['cy']} for cy; cy labeled this "
+        "item in annotate, and nobody labels an item twice in a workflow, so the slot(s) can "
+        "never be filled"
+    )
+    assert engine.request_work("wf", "cy") is None
+    # The panel still waits for Dr Smith; with their label the item is final from the panel.
+    assert final_row(engine, "img_001") is None
+    slot = engine.request_work("wf", "dr_smith")
+    assert slot.slot == reserved["dr_smith"]
+    engine.submit(
+        "wf",
+        slot.slot,
+        "dr_smith",
+        {"value": "dog"},
+        engine.work_packet("wf", slot.slot, "dr_smith").shown(),
+    )
+    assert final_row(engine, "img_001")["source_stage"] == "panel"
+    assert rebuild(engine.store.events()).snapshot() == engine.store.snapshot()
+
+
+def test_a_stranded_reservation_that_was_the_stages_last_slot_lets_the_item_finish(build, cfg):
+    panel = {"name": "panel", "assign_to": "expert", "labels_per_item": "all"}
+    grants = {"cy": ("annotator", "expert")}
+    engine = build(cfg(ANNOTATE, panel, final=["panel", "annotate"]), items=1, grants=grants)
+    annotate_slot = engine.store.select("slots", stage="annotate")[0]["slot"]
+    engine.claim("wf", annotate_slot, "cy")
+    engine.submit(
+        "wf",
+        annotate_slot,
+        "cy",
+        {"value": "cat"},
+        engine.work_packet("wf", annotate_slot, "cy").shown(),
+    )
+    assert [e.type for e in events_of(engine, "img_001")][-5:] == [
+        "label_submitted",
+        "slots_cancelled",
+        "stage_completed",  # annotate, with Cy's label
+        "stage_completed",  # the panel, with no labels: it goes to no output
+        "item_finalized",
+    ]
+    final = final_row(engine, "img_001")
+    assert final["status"] == "final" and final["source_stage"] == "annotate"
     assert rebuild(engine.store.events()).snapshot() == engine.store.snapshot()

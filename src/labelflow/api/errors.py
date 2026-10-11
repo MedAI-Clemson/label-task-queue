@@ -2,7 +2,9 @@
 
 Every error response has the same shape: ``detail`` is the plain-language message, and
 ``problems`` lists every problem when there are several (an invalid config, a refused edit, a
-rejected label, a bad import batch). The engine's errors keep their own wording.
+rejected label, a bad import batch). The engine's errors keep their own wording, except that
+its "Did you mean ...?" hints are shown to administrators only: a hint names things in the
+project, which someone without a role there must not learn.
 
 ======================================================  ======
 Engine error                                            Status
@@ -13,12 +15,14 @@ not allowed in the current state (already excluded...)  409
 a claim while paused; pausing or resuming twice         409
 not eligible; slot not claimed by you                   403
 refused edit; invalid label; malformed request          422
+a broken event chain                                    500
 ======================================================  ======
 """
 
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Sequence
 from typing import Any
 
@@ -26,6 +30,7 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+from starlette.exceptions import HTTPException
 
 from labelflow.engine import (
     AlreadyExists,
@@ -35,6 +40,7 @@ from labelflow.engine import (
     InvalidLabel,
     InvalidRequest,
     InvalidShown,
+    LabelTaskFailed,
     NotAllowed,
     NotEligible,
     NotFound,
@@ -58,14 +64,17 @@ class ErrorOut(BaseModel):
     )
 
 
-class ApiError(Exception):
-    """A request refused by the web layer itself. ``problems`` lists every problem found."""
+class ApiError(HTTPException):
+    """A request refused by the web layer itself. ``problems`` lists every problem found.
+
+    It is an HTTP exception so that the framework passes it through untouched wherever it
+    may be raised, even while the request body is still being read.
+    """
 
     status = 400
 
     def __init__(self, detail: str, problems: Sequence[str] = ()):
-        super().__init__(detail)
-        self.detail = detail
+        super().__init__(self.status, detail)
         self.problems = list(problems)
 
 
@@ -79,6 +88,12 @@ class Forbidden(ApiError):
     """Logged in, but this account may not do this."""
 
     status = 403
+
+
+class TooLarge(ApiError):
+    """The request, or a part of it, is bigger than the server accepts."""
+
+    status = 413
 
 
 class Unprocessable(ApiError):
@@ -103,8 +118,11 @@ _STATUS: dict[type[Exception], int] = {
     InvalidLabel: 422,
     InvalidShown: 422,
     BrokenChain: 500,
+    LabelTaskFailed: 422,  # the label task could not handle the label
     EngineError: 422,
 }
+
+_HINT = re.compile(r" Did you mean '[^']*'\?")
 
 
 def status_for(error: Exception) -> int:
@@ -115,23 +133,38 @@ def status_for(error: Exception) -> int:
     return 500
 
 
-def _body(detail: str, problems: Sequence[str] = ()) -> dict[str, Any]:
-    return {"detail": detail, "problems": list(problems)}
+def is_admin(request: Request) -> bool:
+    """Whether the request was made by an administrator (``deps.current_user`` records it)."""
+    user = getattr(request.state, "user", None)
+    return user is not None and user.is_admin
 
 
 def _reply(status: int, detail: str, problems: Sequence[str] = ()) -> JSONResponse:
     headers = {"WWW-Authenticate": "Bearer"} if status == 401 else None
-    return JSONResponse(_body(detail, problems), status_code=status, headers=headers)
+    body = {"detail": detail, "problems": list(problems)}
+    return JSONResponse(body, status_code=status, headers=headers)
 
 
-def _engine_error(_: Request, error: Exception) -> JSONResponse:
+def _engine_error(request: Request, error: Exception) -> JSONResponse:
     assert isinstance(error, EngineError)
-    return _reply(status_for(error), str(error), getattr(error, "problems", ()))
+    status = status_for(error)
+    if status >= 500:
+        log.exception("Engine error", exc_info=error)
+    detail = str(error) if is_admin(request) else _HINT.sub("", str(error))
+    return _reply(status, detail, getattr(error, "problems", ()))
 
 
 def _api_error(_: Request, error: Exception) -> JSONResponse:
     assert isinstance(error, ApiError)
     return _reply(error.status, error.detail, error.problems)
+
+
+def _http_error(_: Request, error: Exception) -> JSONResponse:
+    """The framework's own refusals (an unknown address, a wrong method) in the same shape."""
+    assert isinstance(error, HTTPException)
+    response = _reply(error.status_code, str(error.detail))
+    response.headers.update(error.headers or {})
+    return response
 
 
 def _unknown_label_task(_: Request, error: Exception) -> JSONResponse:
@@ -162,6 +195,7 @@ def _unexpected(_: Request, error: Exception) -> JSONResponse:
 def add_error_handlers(app: FastAPI) -> None:
     app.add_exception_handler(EngineError, _engine_error)
     app.add_exception_handler(ApiError, _api_error)
+    app.add_exception_handler(HTTPException, _http_error)
     app.add_exception_handler(UnknownLabelTask, _unknown_label_task)
     app.add_exception_handler(RequestValidationError, _bad_request)
     app.add_exception_handler(Exception, _unexpected)
@@ -170,9 +204,11 @@ def add_error_handlers(app: FastAPI) -> None:
 _DESCRIPTIONS = {
     401: "You are not logged in, or the login is wrong or has expired.",
     403: "This account may not do this (or the slot is not yours to work on).",
-    404: "Nothing with that name exists.",
+    404: "Nothing with that name exists, or you hold no role in the project.",
     409: "It already exists, the current state does not allow it (such as a claim while the "
     "stage is paused), or the request was based on an old config version.",
+    413: "The request, or a label or an item's properties in it, is bigger than the server "
+    "accepts.",
     422: "The request is not valid. `problems` lists everything that is wrong.",
 }
 

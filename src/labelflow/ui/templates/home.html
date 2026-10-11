@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Home · label-task-queue{% endblock %}
+{% block content %}
+<h1>Your work</h1>
+{% if not projects %}
+  <p>You hold no role in any project yet.{% if user.is_admin %} <a href="{{ root }}/admin/projects">Create a project.</a>{% endif %}</p>
+{% endif %}
+{% for project in projects %}
+<section class="card">
+  <h2>Project {{ project.name }}
+    {% if user.is_admin %}<a class="small" href="{{ root }}/admin/projects/{{ project.name }}">manage</a>{% endif %}
+  </h2>
+  {% if project.my_roles %}<p class="muted">Your roles: {{ project.my_roles | join(", ") }}</p>{% endif %}
+  {% if not project.workflows %}
+    <p class="muted">No workflow for you here{% if user.is_admin %} yet{% endif %}.</p>
+  {% else %}
+  <table class="list">
+    <thead><tr><th>Workflow</th><th>Work waiting for you</th><th></th></tr></thead>
+    <tbody>
+    {% for row in project.workflows %}
+      <tr>
+        <td><a href="{{ root }}/projects/{{ project.name }}/workflows/{{ row.name }}">{{ row.name }}</a>
+          {% if row.my_roles %}<span class="muted">as {{ row.my_roles | join(", ") }}</span>{% endif %}
+          {% if row.paused %}<span class="tag">paused</span>{% endif %}
+          {% for s in row.paused_stages %}<span class="tag">stage {{ s }} paused</span>{% endfor %}
+        </td>
+        <td>
+          {% if row.held %}you hold slot {{ row.held }}{% else %}{{ row.waiting }} open slot{{ "" if row.waiting == 1 else "s" }}{% endif %}
+        </td>
+        <td>
+          {% if row.held %}
+            <a class="button" href="{{ root }}/projects/{{ project.name }}/workflows/{{ row.name }}/slots/{{ row.held }}">Continue</a>
+          {% elif row.my_roles %}
+            <form class="inline" method="post" action="{{ root }}/projects/{{ project.name }}/workflows/{{ row.name }}/next">
+              <input type="hidden" name="csrf" value="{{ csrf }}">
+              <button type="submit"{% if not row.waiting %} aria-describedby="nowork-hint"{% endif %}>Get work</button>
+            </form>
+          {% endif %}
+          {% if user.is_admin %}<a class="small" href="{{ root }}/admin/projects/{{ project.name }}/workflows/{{ row.name }}">admin</a>{% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</section>
+{% endfor %}
+<p id="nowork-hint" class="muted">Asking for work claims the next slot you may take: later stages first, then the oldest item.</p>
+{% endblock %}

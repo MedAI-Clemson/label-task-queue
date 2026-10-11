@@ -257,6 +257,61 @@ def test_a_malformed_mask_is_not_a_valid_coco_rle(task, make_label, bad, message
     assert problems_of(task, label) == [f"Mask 'lung' is not a valid COCO RLE: {message}"]
 
 
+# --- Masks too big to handle --------------------------------------------------------------
+
+HUGE = {"size": [100000, 100000], "counts": "PPigPZ9"}  # 10 gigapixels in seven characters
+
+
+def test_a_mask_claiming_a_huge_image_is_refused_in_plain_language(task, make_label):
+    label = make_label(lung=HUGE, effusion=HUGE)
+    assert problems_of(task, label) == [
+        "Mask 'lung' is not a valid COCO RLE: 'size' is 100000 x 100000, but a mask can be "
+        "at most 16384 pixels high and wide.",
+        "Mask 'effusion' is not a valid COCO RLE: 'size' is 100000 x 100000, but a mask can "
+        "be at most 16384 pixels high and wide.",
+    ]
+
+
+def test_a_huge_mask_is_refused_as_a_key_too(task, make_label):
+    with pytest.raises(LabelValidationError, match=r"The key is invalid.*at most 16384 pixels"):
+        task.score(make_label(), make_label(lung=HUGE))
+
+
+def test_a_mask_over_the_pixel_cap_names_the_cap(task, make_label):
+    too_many = {"size": [8192, 8193], "counts": [8192 * 8193]}
+    label = make_label(lung=too_many, effusion=too_many)
+    assert problems_of(task, label) == [
+        "Mask 'lung' is not a valid COCO RLE: 'size' is 8192 x 8193, which is 67117056 pixels, "
+        "but a mask can have at most 67108864 pixels (about 8192 x 8192).",
+        "Mask 'effusion' is not a valid COCO RLE: 'size' is 8192 x 8193, which is 67117056 "
+        "pixels, but a mask can have at most 67108864 pixels (about 8192 x 8192).",
+    ]
+
+
+def test_a_giant_counts_string_is_refused(task, make_label):
+    label = make_label(lung={"size": [10, 10], "counts": "0" * 5000})
+    assert problems_of(task, label) == [
+        "Mask 'lung' is not a valid COCO RLE: 'counts' is 5000 characters long, which is longer "
+        "than the counts of any mask with at most 100 pixels can be."
+    ]
+
+
+def test_an_ontology_can_set_its_own_pixel_cap(make_label, block):
+    task = load_ontology(
+        "name: small\nversion: 1\nmax_mask_pixels: 50\nmasks:\n  - name: lung\n    threshold: 0.5\n"
+    )
+    fits = {"classifications": {}, "masks": {"lung": rle.encode(block(25, 5, 10))}}
+    assert task.validate(fits) == fits
+    too_big = {"classifications": {}, "masks": {"lung": rle.encode(block(0))}}  # 10 x 10
+    assert problems_of(task, too_big) == [
+        "Mask 'lung' is not a valid COCO RLE: 'size' is 10 x 10, which is 100 pixels, but a "
+        "mask can have at most 50 pixels."
+    ]
+    # the consensus check honours the same cap, and never decodes a mask
+    result = task.check_consensus([fits, fits])
+    assert result.agreed and result.detail["masks"]["lung"]["pairwise_iou"] == [[0, 1, 1.0]]
+
+
 def test_masks_of_different_sizes_in_one_label(task, make_label, block):
     label = make_label(lung=block(40), effusion=block(0, 5, 5))
     assert problems_of(task, label) == [

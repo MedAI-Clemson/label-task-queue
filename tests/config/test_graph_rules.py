@@ -176,6 +176,166 @@ def test_agreement_split_that_does_not_cover_everything_is_refused(stages):
     assert [problem.where for problem in problems] == ["stage 'a'"]
 
 
+# --- Parallel stages sharing a role, with labels_per_item: all ----------------------------
+
+
+def test_two_root_stages_sharing_a_role_may_not_both_label_by_everyone():
+    [problem] = problems_of(
+        [
+            ("a", {"assign_to": "expert", "labels_per_item": "all"}),
+            ("b", {"assign_to": "expert", "labels_per_item": "all"}),
+        ],
+        final="none",
+    )
+    assert problem.where == "stage 'a', key 'labels_per_item'"
+    assert problem.message == (
+        "Stages 'a' and 'b' can both hold the same item at the same time (both take every item "
+        "of the dataset), and both are assigned to the role 'expert'. Both have "
+        "`labels_per_item: all`, which reserves a slot in each stage for every holder of the "
+        "role 'expert', but nobody labels an item twice in a workflow, so each person can fill "
+        "only one of their two slots, and the item would stay in progress forever. Give the two "
+        "stages different roles, or chain them so that one takes the other's output "
+        "(`input: a` on 'b')."
+    )
+
+
+def test_one_all_stage_in_parallel_with_an_ordinary_stage_on_the_same_role():
+    [problem] = problems_of(
+        [
+            ("annotate", {"assign_to": "annotator"}),
+            ("check", {"input": "annotate", "assign_to": ["expert", "lead"]}),
+            ("review", {"input": "annotate", "assign_to": "expert", "labels_per_item": "all"}),
+        ],
+        final=["review", "check", "annotate"],
+    )
+    assert problem.where == "stage 'review', key 'labels_per_item'"
+    assert problem.message == (
+        "Stages 'check' and 'review' can both hold the same item at the same time (both take "
+        "their items from 'annotate'), and both are assigned to the role 'expert'. 'review' "
+        "has `labels_per_item: all`, which reserves a slot for every holder of the role "
+        "'expert', but nobody labels an item twice in a workflow, so anyone who labels the "
+        "item in 'check' first can never fill their slot in 'review', and the item would stay "
+        "in progress forever. Give the two stages different roles, or chain them so that one "
+        "takes the other's output (`input: check` on 'review')."
+    )
+
+
+def test_parallel_stages_further_apart_in_the_graph_still_conflict():
+    # 'audit' takes the output of 'b', which takes 'a'; 'a' and 'audit' hold items together
+    [problem] = problems_of(
+        [
+            ("a", {"assign_to": "expert", "labels_per_item": "all"}),
+            ("b", {"assign_to": "annotator"}),
+            ("audit", {"input": "b", "assign_to": ["expert", "lead"]}),
+        ],
+        final="none",
+    )
+    assert problem.where == "stage 'a', key 'labels_per_item'"
+    assert problem.message.startswith(
+        "Stages 'a' and 'audit' can both hold the same item at the same time (neither takes its "
+        "items from the other), and both are assigned to the role 'expert'."
+    )
+
+
+def test_several_shared_roles_are_all_named():
+    [problem] = problems_of(
+        [
+            ("a", {"assign_to": ["expert", "lead", "x"], "labels_per_item": "all"}),
+            ("b", {"assign_to": ["lead", "expert"]}),
+        ],
+        final="none",
+    )
+    assert "both are assigned to the roles 'expert' and 'lead'" in problem.message
+
+
+@pytest.mark.parametrize(
+    "stages",
+    [
+        # the agreed and disagreed sides of one stage never hold the same item
+        [
+            ("annotate", {"labels_per_item": 2}),
+            (
+                "confirm",
+                {"input": "annotate.agreed", "assign_to": "expert", "labels_per_item": "all"},
+            ),
+            (
+                "adjudicate",
+                {"input": "annotate.disagreed", "assign_to": "expert", "labels_per_item": "all"},
+            ),
+        ],
+        # ...nor do stages further down each side
+        [
+            ("annotate", {"labels_per_item": 2}),
+            ("confirm", {"input": "annotate.agreed", "assign_to": "x"}),
+            ("audit", {"input": "confirm", "assign_to": "expert", "labels_per_item": "all"}),
+            ("adjudicate", {"input": "annotate.disagreed", "assign_to": "expert"}),
+        ],
+        # chained stages are not parallel: the item leaves 'a' before it reaches 'b'
+        [
+            ("a", {"assign_to": "expert", "labels_per_item": "all"}),
+            ("b", {"input": "a", "assign_to": "expert"}),
+        ],
+        [
+            ("a", {"assign_to": "expert"}),
+            ("b", {"input": "a", "assign_to": "x"}),
+            ("c", {"input": "b", "assign_to": "expert", "labels_per_item": "all"}),
+        ],
+        # different roles never conflict
+        [
+            ("a", {"assign_to": "expert", "labels_per_item": "all"}),
+            ("b", {"assign_to": "annotator", "labels_per_item": "all"}),
+        ],
+        # a shared role without `all` is a staffing question (a warning), not an error
+        [
+            ("a", {"assign_to": "expert", "labels_per_item": 2}),
+            ("b", {"assign_to": "expert", "labels_per_item": {"count": 3, "fraction": 0.5}}),
+        ],
+    ],
+    ids=[
+        "agreed_and_disagreed",
+        "downstream_of_a_split",
+        "chained",
+        "chained_further",
+        "different_roles",
+        "no_all",
+    ],
+)
+def test_stages_that_cannot_hold_an_item_together_may_share_a_role(stages):
+    make(stages, final="none")
+
+
+def test_parallel_stages_are_listed_as_pairs():
+    from labelflow.engine.config.graph import parallel_stages
+
+    config = make(
+        [
+            ("annotate", {"labels_per_item": 2}),
+            ("review", {"input": "annotate", "assign_to": "x", "sample": 0.2}),
+            ("confirm", {"input": "annotate.agreed", "assign_to": "y"}),
+            ("adjudicate", {"input": "annotate.disagreed", "assign_to": "z"}),
+            ("audit", {"input": "adjudicate", "assign_to": "w"}),
+        ],
+        final=["audit", "review", "confirm", "annotate"],
+    )
+    assert parallel_stages(config.model_dump()) == [
+        ("review", "confirm"),
+        ("review", "adjudicate"),
+        ("review", "audit"),
+    ]
+
+
+def test_the_parallel_rule_waits_until_the_rest_of_the_document_is_clean():
+    # with an input problem, the graph cannot be trusted, so only that problem is reported
+    [problem] = problems_of(
+        [
+            ("a", {"assign_to": "expert", "labels_per_item": "all"}),
+            ("b", {"input": "nope", "assign_to": "expert", "labels_per_item": "all"}),
+        ],
+        final="none",
+    )
+    assert problem.where == "stage 'b', key 'input'"
+
+
 def test_all_problems_are_reported_together():
     problems = problems_of(
         [("b", {"input": "a"}), ("a", {}), ("a", {"input": "a.agreed"})], final=["b", "b"]

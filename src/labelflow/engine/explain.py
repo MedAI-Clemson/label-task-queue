@@ -18,16 +18,17 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict
 
 from labelflow.engine import events as ev
+from labelflow.engine.config import and_list
 from labelflow.engine.eligibility import Person, load_person, offered_last, why_not
 from labelflow.engine.events import Event, canonical_json
 from labelflow.engine.queries import (
     active_config,
-    and_list,
     blocking_pauses,
     export_status,
     holders,
     item_row,
     live_slots,
+    when,
     workflow_item,
     workflow_row,
 )
@@ -64,6 +65,10 @@ class FinalLabel(_View):
     label_ids: tuple[int, ...]
     rule: str
     config_version: int
+
+    @classmethod
+    def from_row(cls, row: Row) -> FinalLabel:
+        return cls(**{k: row[k] for k in cls.model_fields if k in row}, label=row["value"])
 
 
 class Explanation(_View):
@@ -125,55 +130,36 @@ _VERBS = {
 
 def explain(store: Store, workflow: str, item: str) -> Explanation:
     """Build the explanation of one item in one workflow."""
-    tables = store
-    row = workflow_item(tables, workflow, item)
-    dataset = workflow_row(tables, workflow)["dataset"]
-    imported = item_row(tables, workflow, item)
-    about = [
-        e
+    row = workflow_item(store, workflow, item)
+    dataset = workflow_row(store, workflow)["dataset"]
+    imported = item_row(store, workflow, item)
+    entries = [
+        TraceEntry(
+            seq=e.seq,
+            at=e.at,
+            type=e.type,
+            stage=e.stage,
+            actor=e.actor,
+            summary=_summary(e),
+            because=e.because,
+        )
         for e in store.events(item=item)
         if e.workflow == workflow or (e.type == "item_imported" and e.dataset == dataset)
     ]
-    final_row = tables.get("final_labels", workflow=workflow, item=item)
-    final = None
-    if final_row is not None:
-        final = FinalLabel(
-            status=final_row["status"],
-            label=final_row["value"],
-            source_stage=final_row["source_stage"],
-            label_ids=tuple(final_row["label_ids"]),
-            rule=final_row["rule"],
-            config_version=final_row["config_version"],
-        )
+    entries += _activations(store, workflow, row)
+    final_row = store.get("final_labels", workflow=workflow, item=item)
     waiting: tuple[WaitingSlot, ...] = ()
     if row["status"] == "in_progress":
-        waiting = tuple(_waiting(tables, workflow, item))
+        waiting = tuple(_waiting(store, workflow, item))
     return Explanation(
         workflow=workflow,
         item=item,
         dataset=dataset,
         uri=imported["uri"],
         content_hash=imported["content_hash"],
-        status=export_status(tables, workflow, item),
-        final=final,
-        trace=tuple(
-            sorted(
-                [
-                    TraceEntry(
-                        seq=e.seq,
-                        at=e.at,
-                        type=e.type,
-                        stage=e.stage,
-                        actor=e.actor,
-                        summary=_summary(e),
-                        because=e.because,
-                    )
-                    for e in about
-                ]
-                + _activations(tables, workflow, row),
-                key=lambda entry: entry.seq,
-            )
-        ),
+        status=export_status(store, workflow, item),
+        final=None if final_row is None else FinalLabel.from_row(final_row),
+        trace=tuple(sorted(entries, key=lambda entry: entry.seq)),
         waiting=waiting,
     )
 
@@ -213,8 +199,7 @@ def _waiting(tables: Tables, workflow: str, item: str) -> list[WaitingSlot]:
     for slot in live_slots(tables, workflow, item):
         name = f"slot {slot['index']} of {slot['stage']} (id {slot['slot']})"
         if slot["status"] == "claimed":
-            since = datetime.fromisoformat(slot["claimed_at"]).strftime("%Y-%m-%d %H:%M UTC")
-            reason = f"{name} is claimed by {slot['claimed_by']} since {since}"
+            reason = f"{name} is claimed by {slot['claimed_by']} since {when(slot['claimed_at'])}"
         else:
             roles = config.stage(slot["stage"]).roles if slot["stage"] in config.stage_names else ()
             pauses = blocking_pauses(tables, workflow, slot["stage"])

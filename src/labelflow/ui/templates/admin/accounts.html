@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Accounts · label-task-queue{% endblock %}
+{% block content %}
+<h1>Accounts</h1>
+<section class="card">
+  <h2>Create an account</h2>
+  <form method="post" action="{{ root }}/admin/accounts" class="grid-form">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label for="new-username">Username</label>
+    <input id="new-username" name="username" required pattern="[a-z0-9][a-z0-9_.\-]*" autocomplete="off" aria-describedby="username-hint">
+    <label for="new-display">Display name</label>
+    <input id="new-display" name="display_name" autocomplete="off">
+    <label for="new-password">First password</label>
+    <input id="new-password" name="password" type="password" minlength="8" required autocomplete="new-password">
+    <label for="new-admin">Administrator</label>
+    <input id="new-admin" name="is_admin" type="checkbox">
+    <span></span><button type="submit">Create</button>
+  </form>
+  <p id="username-hint" class="muted">Lowercase letters, digits, '_', '.' or '-'. The username is the id that labels and events record; it cannot be changed.</p>
+</section>
+<section class="card">
+  <h2>All accounts</h2>
+  <table class="list">
+    <thead><tr><th>Username</th><th>Name</th><th>Kind</th><th>State</th><th>Actions</th></tr></thead>
+    <tbody>
+    {% for a in accounts %}
+      <tr>
+        <td>{{ a.user_id }}</td>
+        <td>{{ a.display_name }}</td>
+        <td>{{ "admin" if a.is_admin else "labeler" }}</td>
+        <td>{{ "active" if a.active else "deactivated" }}</td>
+        <td class="actions">
+          {% if a.active and a.user_id != user.user_id %}
+          <form class="inline" method="post" action="{{ root }}/admin/accounts/{{ a.user_id }}/deactivate">
+            <input type="hidden" name="csrf" value="{{ csrf }}">
+            <button type="submit">Deactivate</button>
+          </form>
+          {% endif %}
+          <form class="inline" method="post" action="{{ root }}/admin/accounts/{{ a.user_id }}/password">
+            <input type="hidden" name="csrf" value="{{ csrf }}">
+            <label class="sr-only" for="pw-{{ a.user_id }}">New password for {{ a.user_id }}</label>
+            <input id="pw-{{ a.user_id }}" name="password" type="password" minlength="8" placeholder="new password" autocomplete="new-password" required>
+            <button type="submit">Reset password</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

@@ -18,6 +18,12 @@ threshold at or above which two masks agree)::
         threshold: 0.8
       - name: effusion
         threshold: 0.5
+    max_mask_pixels: 20000000    # optional: the most pixels (height x width) a mask may have
+
+A label's masks must fit within ``max_mask_pixels`` (by default ``rle.MAX_PIXELS``, 64
+megapixels) and within ``rle.MAX_SIDE`` (16384) on each side, since the server decodes a mask
+into memory pixel by pixel and the interface draws it on a canvas. Set the key lower for small
+images, or higher (up to 16384 x 16384) if the images are bigger and the server has the memory.
 
 The models here reject unknown keys, so a misspelled key is reported instead of ignored. A
 bad file raises ``OntologyError``, whose messages are written for the person who wrote the file.
@@ -48,6 +54,7 @@ from pydantic import (
 )
 
 from labelflow.labeltask.base import describe_kind, did_you_mean, quoted
+from labelflow.labeltask.rle import MAX_PIXELS, MAX_SIDE
 
 # A workflow refers to a label task as name@version, so the name needs a plain shape.
 _ONTOLOGY_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
@@ -125,6 +132,8 @@ class Ontology(_FileModel):
     version: StrictInt
     classifications: tuple[Classification, ...] = ()
     masks: tuple[MaskClass, ...] = ()
+    max_mask_pixels: StrictInt | None = None
+    """The most pixels (height x width) a mask may have; None means ``rle.MAX_PIXELS``."""
 
     @field_validator("name")
     @classmethod
@@ -144,6 +153,22 @@ class Ontology(_FileModel):
             raise ValueError(f"version must be a whole number from 1 up, but it is {version}")
         return version
 
+    @field_validator("max_mask_pixels")
+    @classmethod
+    def _max_mask_pixels_is_a_usable_cap(cls, cap: int | None) -> int | None:
+        if cap is not None and not 1 <= cap <= MAX_SIDE * MAX_SIDE:
+            raise ValueError(
+                f"max_mask_pixels must be a whole number from 1 to {MAX_SIDE * MAX_SIDE} "
+                f"({MAX_SIDE} x {MAX_SIDE}, the largest mask the interface can show), but it "
+                f"is {cap}. Leave it out for the default of {MAX_PIXELS} (64 megapixels)"
+            )
+        return cap
+
+    @property
+    def mask_pixel_cap(self) -> int:
+        """The cap on a mask's pixels in force: ``max_mask_pixels``, or the default."""
+        return MAX_PIXELS if self.max_mask_pixels is None else self.max_mask_pixels
+
     @model_validator(mode="after")
     def _names_are_unique_and_something_is_labeled(self) -> Ontology:
         names = [item.name for item in (*self.classifications, *self.masks)]
@@ -162,9 +187,12 @@ class Ontology(_FileModel):
         """Twelve hex characters that change whenever the ontology's content changes.
 
         The SHA-256 is taken over the ontology as JSON with sorted keys and no spaces, so
-        comments, key order and layout in the file make no difference.
+        comments, key order and layout in the file make no difference. An optional key
+        that is left out (``max_mask_pixels``) is left out of the JSON too, so adding such
+        a key to the model does not change the fingerprint of files that do not use it.
         """
-        canonical = json.dumps(self.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+        data = self.model_dump(mode="json", exclude_none=True)
+        canonical = json.dumps(data, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:12]
 
 

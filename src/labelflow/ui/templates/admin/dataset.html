@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Dataset {{ dataset.dataset }} · label-task-queue{% endblock %}
+{% block content %}
+<p class="crumbs"><a href="{{ root }}/admin/projects">Projects</a> › <a href="{{ root }}/admin/projects/{{ project }}">{{ project }}</a></p>
+<h1>Dataset {{ dataset.dataset }}</h1>
+<p class="muted">{{ dataset.items }} item{{ "" if dataset.items == 1 else "s" }}, created by {{ dataset.created_by }}.</p>
+
+<section class="card">
+  <h2>Import items</h2>
+  <p class="muted">Paste a JSON list (<code>[{"item": "img_001", "uri": "file:///data/img_001.png"}, …]</code>) or CSV with a header row (<code>item,uri,content_hash</code>; other columns become properties, such as a gold key). Leave <code>content_hash</code> out when the server can read the file (a <code>file://</code> address or a path inside the media folder): it hashes the image itself. Items added while a workflow runs over the dataset enter it at once. The batch is all or nothing.</p>
+  <form method="post" action="{{ root }}/admin/projects/{{ project }}/datasets/{{ dataset.dataset }}/items" class="stack">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label for="items">Items (JSON or CSV)</label>
+    <textarea id="items" name="items" rows="8" required spellcheck="false">{{ pasted or "" }}</textarea>
+    <button type="submit">Import</button>
+  </form>
+</section>
+
+<section class="card">
+  <h2>Items {% if page.total > page.limit %}<span class="muted">{{ page.offset + 1 }}–{{ page.offset + page.rows | length }} of {{ page.total }}</span>{% endif %}</h2>
+  {% if not page.rows %}<p class="muted">No item yet.</p>{% else %}
+  <table class="list">
+    <thead><tr><th>Item</th><th>Address</th><th>Content hash</th><th>Properties</th></tr></thead>
+    <tbody>
+    {% for it in page.rows %}
+      <tr><td>{{ it.item }}</td><td class="wrap">{{ it.uri }}</td><td><code>{{ it.content_hash[:12] }}…</code></td><td>{{ it.properties if it.properties else "" }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p>
+    {% if page.offset > 0 %}<a href="?offset={{ [page.offset - page.limit, 0] | max }}">Previous</a>{% endif %}
+    {% if page.offset + page.limit < page.total %}<a href="?offset={{ page.offset + page.limit }}">Next</a>{% endif %}
+  </p>
+  {% endif %}
+</section>
+{% endblock %}

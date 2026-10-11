@@ -1,0 +1,20 @@
+{% if report is none %}
+<p class="muted">Paste or type a config to check it.</p>
+{% else %}
+<p class="{{ 'ok' if report.ok else 'bad' }}" id="validation-summary">{{ report.render().splitlines()[0] }}</p>
+{% if report.errors %}
+<h3>Errors</h3>
+<ol class="problems">{% for p in report.errors %}<li><strong>{{ p.where }}:</strong> {{ p.message }}</li>{% endfor %}</ol>
+{% endif %}
+{% if report.warnings %}
+<h3>Warnings</h3>
+<ol class="warnings">{% for p in report.warnings %}<li><strong>{{ p.where }}:</strong> {{ p.message }}</li>{% endfor %}</ol>
+{% endif %}
+{% if diagram %}
+<h3>Diagram</h3>
+<pre class="mermaid">{{ diagram }}</pre>
+<details><summary>Diagram source (Mermaid)</summary><pre>{{ diagram }}</pre></details>
+<h3>Resolved config (every default written out)</h3>
+<pre class="yaml">{{ resolved }}</pre>
+{% endif %}
+{% endif %}

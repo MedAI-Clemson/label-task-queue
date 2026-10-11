@@ -1,0 +1,33 @@
+{
+ "name": "image_ontology",
+ "version": 1,
+ "classifications": [
+  {
+   "name": "view",
+   "values": [
+    "PA",
+    "AP",
+    "lateral"
+   ],
+   "required": true
+  },
+  {
+   "name": "quality",
+   "values": [
+    "good",
+    "poor"
+   ],
+   "required": false
+  }
+ ],
+ "masks": [
+  {
+   "name": "lung",
+   "threshold": 0.8
+  },
+  {
+   "name": "effusion",
+   "threshold": 0.5
+  }
+ ]
+}

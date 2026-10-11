@@ -91,6 +91,20 @@ def test_changing_a_threshold_changes_the_version(example_dir):
     assert edited.ontology_version != load_ontology(text).ontology_version
 
 
+def test_the_mask_pixel_cap_is_part_of_the_version_only_when_set():
+    task = load_ontology(MINIMAL)
+    assert task.ontology.max_mask_pixels is None
+    assert task.ontology.mask_pixel_cap == 64 * 1024 * 1024
+    capped = load_ontology(MINIMAL + "max_mask_pixels: 1000000\n")
+    assert capped.ontology.max_mask_pixels == capped.ontology.mask_pixel_cap == 1_000_000
+    assert capped.ontology_version != task.ontology_version
+    # the key left out does not enter the fingerprint, so fingerprints from before it existed hold
+    data = task.ontology.model_dump(mode="json")
+    assert data.pop("max_mask_pixels") is None
+    canonical = json.dumps(data, sort_keys=True, separators=(",", ":"))
+    assert task.ontology_version.endswith(hashlib.sha256(canonical.encode()).hexdigest()[:12])
+
+
 def test_layout_and_comments_do_not_change_the_version():
     reordered = """\
     # a comment, and the keys in another order
@@ -208,7 +222,7 @@ BAD_FILES = [
         "name: tiny\nversion: 1\nclasifications: []\n",
         [
             "Unknown key 'clasifications'. Did you mean 'classifications'? The allowed keys are "
-            "'name', 'version', 'classifications', 'masks'."
+            "'name', 'version', 'classifications', 'masks', 'max_mask_pixels'."
         ],
         id="misspelled-top-level-key",
     ),
@@ -240,6 +254,30 @@ BAD_FILES = [
         "name: tiny\nversion: 1\n",
         ["The ontology has no classifications and no masks, so there is nothing to label."],
         id="nothing-to-label",
+    ),
+    pytest.param(
+        MINIMAL + "max_mask_pixels: 0\n",
+        [
+            "Max_mask_pixels must be a whole number from 1 to 268435456 (16384 x 16384, the "
+            "largest mask the interface can show), but it is 0. Leave it out for the default "
+            "of 67108864 (64 megapixels)"
+        ],
+        id="pixel-cap-zero",
+    ),
+    pytest.param(
+        MINIMAL + "max_mask_pixels: 300000000\n",
+        ["Max_mask_pixels must be a whole number from 1 to 268435456"],
+        id="pixel-cap-above-the-largest-mask",
+    ),
+    pytest.param(
+        MINIMAL + "max_mask_pixels: 1e6\n",
+        ["'max_mask_pixels' must be a whole number."],
+        id="pixel-cap-not-a-whole-number",
+    ),
+    pytest.param(
+        MINIMAL + "max_mask_pixels: '1000000'\n",
+        ["'max_mask_pixels' must be a whole number."],
+        id="pixel-cap-in-quotes",
     ),
     pytest.param(
         "name: tiny\nversion: 1\nclassifications:\n  - name: view\n    values: []\n",

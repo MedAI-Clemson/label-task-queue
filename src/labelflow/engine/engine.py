@@ -1,9 +1,10 @@
-"""The engine: the commands people use, each turned into logged events.
+"""The engine: the commands people use, each turned into logged events, and the reads.
 
 One ``Engine`` serves one project (its roles, datasets and workflows). Every command runs in
 one store transaction: it reads the current state, checks the request, and appends events;
 the reducer applies each event to the derived tables as it is appended. A refused request
-raises an ``EngineError`` with a plain-language message and appends nothing.
+raises an ``EngineError`` with a plain-language message and appends nothing. Every read
+runs in ``store.reading()``: one consistent state, no write lock.
 
 The engine is plain Python. It knows nothing about the web layer or the database.
 """
@@ -12,17 +13,18 @@ from __future__ import annotations
 
 import hashlib
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from labelflow.engine import events as ev
-from labelflow.engine.config import WorkflowConfig, role_warnings
+from labelflow.engine import reads
+from labelflow.engine.config import ValidationContext, WorkflowConfig, and_list, role_warnings
 from labelflow.engine.config.models import NAME_PATTERN
 from labelflow.engine.edits import ChangePreview, ConfigSource, prepare_edit
-from labelflow.engine.eligibility import Person, load_person, offered_last, why_not
+from labelflow.engine.eligibility import Person, load_person, next_slot, why_not
 from labelflow.engine.errors import (
     AlreadyExists,
     EditRefused,
@@ -33,41 +35,46 @@ from labelflow.engine.errors import (
     NotEligible,
     Paused,
     SlotNotYours,
-    UnknownDataset,
     UnknownLabelTaskRef,
     UnknownRole,
-    UnknownSlot,
     VersionConflict,
 )
-from labelflow.engine.events import Shown, canonical_json
+from labelflow.engine.events import Event, Shown, canonical_json
 from labelflow.engine.explain import Explanation, explain
 from labelflow.engine.export import export_items, export_labels, sampling_report, score_report
-from labelflow.engine.flow import Flow
+from labelflow.engine.flow import Flow, ask_task
 from labelflow.engine.queries import (
     active_config,
     active_pause,
-    and_list,
     blocking_pauses,
     config_at,
-    did_you_mean,
+    dataset_row,
     held_roles,
-    item_row,
-    labels_of,
     next_id,
     pause_text,
     role_holders,
+    role_row,
+    slot_row,
     stage_of,
+    when,
     workflow_item,
     workflow_row,
 )
+from labelflow.engine.shown import check_shown
 from labelflow.engine.store import Store
 from labelflow.engine.tables import Row
 from labelflow.engine.views import (
-    ConsensusShown,
-    Pause,
+    ConfigVersion,
+    Dataset,
+    Item,
+    NewItem,
+    Page,
     PauseState,
-    PriorLabel,
+    Progress,
+    Role,
     Slot,
+    Workflow,
+    WorkflowDetail,
     WorkPacket,
 )
 from labelflow.labeltask import Label, LabelTaskRegistry, LabelValidationError, UnknownLabelTask
@@ -89,8 +96,6 @@ class Engine:
         self.label_tasks = label_tasks
         self.clock = clock
 
-    # --- helpers --------------------------------------------------------------------------
-
     def _now(self) -> datetime:
         """The command's timestamp: one per command, in UTC."""
         now = self.clock()
@@ -102,36 +107,6 @@ class Engine:
         """The automatic decisions, following ``version`` (the one the command read)."""
         return Flow(self.store, self.label_tasks, workflow, at, version)
 
-    def _my_slot(self, workflow: str, slot_id: int, user: str) -> Row:
-        """The slot, if it belongs to the workflow and the person has claimed it."""
-        workflow_row(self.store, workflow)
-        slot = self.store.get("slots", slot=slot_id)
-        if slot is None or slot["workflow"] != workflow:
-            raise UnknownSlot(f"Workflow '{workflow}' has no slot {slot_id}.")
-        if slot["status"] == "claimed" and slot["claimed_by"] == user:
-            return slot
-        state = {
-            "open": "it is open; ask for work to claim a slot",
-            "claimed": f"it is claimed by {slot['claimed_by']}",
-            "filled": "it already has its label",
-            "cancelled": "it was cancelled",
-        }[slot["status"]]
-        raise SlotNotYours(f"Slot {slot_id} is not claimed by {user}: {state}.")
-
-    def _require_role(self, role: str) -> None:
-        if self.store.get("roles", role=role) is None:
-            known = [r["role"] for r in self.store.select("roles")]
-            raise UnknownRole(
-                f"There is no role named '{role}'; define it first.{did_you_mean(role, known)}"
-            )
-
-    def _require_dataset(self, dataset: str) -> None:
-        if self.store.get("datasets", dataset=dataset) is None:
-            known = [r["dataset"] for r in self.store.select("datasets")]
-            raise UnknownDataset(
-                f"There is no dataset named '{dataset}'.{did_you_mean(dataset, known)}"
-            )
-
     # --- project: roles, datasets, items --------------------------------------------------
 
     def define_role(self, role: str, actor: str | None) -> None:
@@ -140,30 +115,18 @@ class Engine:
         with self.store.transaction():
             if self.store.get("roles", role=role) is not None:
                 raise AlreadyExists(f"Role '{role}' is already defined.")
-            self.store.append(
-                ev.RoleDefined(
-                    at=self._now(), actor=actor, role=role, because=f"defined by {actor}"
-                )
-            )
+            self._log(ev.RoleDefined, actor, role=role, because=f"defined by {actor}")
 
     def grant_role(self, user: str, role: str, actor: str | None, reason: str) -> list[str]:
         """Give a person a role. Returns staffing warnings for the running workflows."""
         _check_text(user, "user")
         _check_text(reason, "reason")
         with self.store.transaction():
-            self._require_role(role)
+            role_row(self.store, role)
             if role in held_roles(self.store, user):
                 raise AlreadyExists(f"{user} already holds role '{role}'.")
-            self.store.append(
-                ev.RoleGranted(
-                    at=self._now(),
-                    actor=actor,
-                    user=user,
-                    role=role,
-                    reason=reason,
-                    because=f"granted by {actor}: {reason}",
-                )
-            )
+            because = f"granted by {actor}: {reason}"
+            self._log(ev.RoleGranted, actor, user=user, role=role, reason=reason, because=because)
             return self._all_staffing_warnings()
 
     def revoke_role(self, user: str, role: str, actor: str | None, reason: str) -> list[str]:
@@ -171,19 +134,11 @@ class Engine:
         claim. Returns staffing warnings for the running workflows."""
         _check_text(reason, "reason")
         with self.store.transaction():
-            self._require_role(role)
+            role_row(self.store, role)
             if role not in held_roles(self.store, user):
                 raise NotAllowed(f"{user} does not hold role '{role}'.")
-            self.store.append(
-                ev.RoleRevoked(
-                    at=self._now(),
-                    actor=actor,
-                    user=user,
-                    role=role,
-                    reason=reason,
-                    because=f"revoked by {actor}: {reason}",
-                )
-            )
+            because = f"revoked by {actor}: {reason}"
+            self._log(ev.RoleRevoked, actor, user=user, role=role, reason=reason, because=because)
             return self._all_staffing_warnings()
 
     def create_dataset(self, name: str, actor: str | None) -> None:
@@ -191,11 +146,7 @@ class Engine:
         with self.store.transaction():
             if self.store.get("datasets", dataset=name) is not None:
                 raise AlreadyExists(f"Dataset '{name}' already exists.")
-            self.store.append(
-                ev.DatasetCreated(
-                    at=self._now(), actor=actor, dataset=name, because=f"created by {actor}"
-                )
-            )
+            self._log(ev.DatasetCreated, actor, dataset=name, because=f"created by {actor}")
 
     def import_item(
         self,
@@ -206,41 +157,51 @@ class Engine:
         properties: Mapping[str, Any] | None = None,
         actor: str | None = None,
     ) -> None:
-        """Add an item to a dataset. The caller hashes the image; the engine never reads it.
-
-        The item enters every running workflow over the dataset in the same transaction.
-        """
-        _check_text(item_id, "item id")
-        _check_text(uri, "uri")
-        _check_text(content_hash, "content hash")
+        """Add one item to a dataset (see ``import_items``)."""
         try:
-            props = _JSON_DICT.validate_python(dict(properties or {}))
-        except ValidationError as error:
-            raise InvalidRequest(f"Item properties must be JSON values: {error}") from None
+            props = dict(properties or {})
+            new = NewItem(item=item_id, uri=uri, content_hash=content_hash, properties=props)
+        except (TypeError, ValidationError) as error:
+            raise InvalidRequest(
+                f"The item needs text fields and JSON properties: {error}"
+            ) from None
+        self.import_items(dataset, [new], actor)
+
+    def import_items(self, dataset: str, items: Iterable[NewItem], actor: str | None) -> list[str]:
+        """Add items to a dataset, all or none; returns their ids in import order.
+
+        The caller hashes each image; the engine never reads it. An item already in the
+        dataset, or listed twice, refuses the whole batch. Each item enters every running
+        workflow over the dataset in the same transaction.
+        """
+        batch = list(items)
         with self.store.transaction():
-            self._require_dataset(dataset)
-            if self.store.get("items", dataset=dataset, item=item_id) is not None:
-                raise AlreadyExists(f"Dataset '{dataset}' already has an item '{item_id}'.")
+            dataset_row(self.store, dataset)
+            seen: set[str] = set()
+            for new in batch:
+                _check_text(new.item, "item id")
+                _check_text(new.uri, "uri")
+                _check_text(new.content_hash, "content hash")
+                if self.store.get("items", dataset=dataset, item=new.item) is not None:
+                    raise AlreadyExists(f"Dataset '{dataset}' already has an item '{new.item}'.")
+                if new.item in seen:
+                    raise InvalidRequest(f"Item '{new.item}' is listed twice in the import.")
+                seen.add(new.item)
             at = self._now()
-            self.store.append(
-                ev.ItemImported(
-                    at=at,
-                    actor=actor,
-                    item=item_id,
-                    dataset=dataset,
-                    uri=uri,
-                    content_hash=content_hash,
-                    properties=props,
-                    because=f"imported into {dataset} by {actor}",
-                )
-            )
             running = self.store.select("workflows", dataset=dataset, status="running")
-            for row in sorted(running, key=lambda r: r["seq"]):
-                because = (
-                    f"{row['workflow']}.dataset = {dataset}; the item was imported while the "
-                    "workflow runs"
+            flows = [self._flow(r["workflow"], at) for r in sorted(running, key=lambda r: r["seq"])]
+            for new in batch:
+                self._log(
+                    ev.ItemImported,
+                    actor,
+                    at=at,
+                    dataset=dataset,
+                    because=f"imported into {dataset} by {actor}",
+                    **new.model_dump(),
                 )
-                self._flow(row["workflow"], at).enter(item_id, because)
+                for flow in flows:
+                    flow.enter(new.item, "the item was imported while the workflow runs")
+            return [new.item for new in batch]
 
     # --- workflows ------------------------------------------------------------------------
 
@@ -261,7 +222,7 @@ class Engine:
             name = config.workflow
             if self.store.get("workflows", workflow=name) is not None:
                 raise AlreadyExists(f"A workflow named '{name}' already exists.")
-            self._require_dataset(config.dataset)
+            dataset_row(self.store, config.dataset)
             try:
                 self.label_tasks.get(config.label_task)
             except UnknownLabelTask as error:
@@ -275,43 +236,22 @@ class Engine:
                     "define them first."
                 )
             data = config.model_dump(mode="json")
-            at = self._now()
-            self.store.append(
-                ev.WorkflowStarted(
-                    at=at,
-                    actor=actor,
-                    workflow=name,
-                    config_version=1,
-                    dataset=config.dataset,
-                    label_task=config.label_task,
-                    seed=seed,
-                    config=data,
-                    config_hash=_config_hash(data),
-                    because=f"started by {actor} with config version 1 and seed {seed}",
-                )
-            )
+            at = self._log(
+                ev.WorkflowStarted,
+                actor,
+                workflow=name,
+                config_version=1,
+                dataset=config.dataset,
+                label_task=config.label_task,
+                seed=seed,
+                config=data,
+                config_hash=_config_hash(data),
+                because=f"started by {actor} with config version 1 and seed {seed}",
+            ).at
             flow = self._flow(name, at)
-            items = self.store.select("items", dataset=config.dataset)
-            for item in sorted(items, key=lambda r: r["seq"]):
-                because = (
-                    f"{name}.dataset = {config.dataset}; the item was in the dataset when the "
-                    "workflow started"
-                )
-                flow.enter(item["item"], because)
+            for item in sorted(self.store.select("items", dataset=config.dataset), key=_seq):
+                flow.enter(item["item"], "the item was in the dataset when the workflow started")
             return self.staffing_warnings(name)
-
-    def staffing_warnings(self, workflow: str) -> list[str]:
-        """Stages that the people holding their roles cannot fill, in plain language."""
-        with self.store.transaction():
-            _, config = active_config(self.store, workflow)
-            roles = role_holders(self.store)
-            return [f"workflow {workflow}, {problem}" for problem in role_warnings(config, roles)]
-
-    def _all_staffing_warnings(self) -> list[str]:
-        rows = self.store.select("workflows", status="running")
-        return [w for row in rows for w in self.staffing_warnings(row["workflow"])]
-
-    # --- editing a running workflow -------------------------------------------------------
 
     def preview_edit(self, workflow: str, new_config: ConfigSource) -> ChangePreview:
         """What activating ``new_config`` would change, without changing anything.
@@ -320,7 +260,7 @@ class Engine:
         text). The preview classifies every change against the active version, lists why
         the edit would be refused (if it would), and counts what it touches. See ``edits``.
         """
-        with self.store.transaction():
+        with self.store.reading():
             preview, _ = prepare_edit(self.store, workflow, new_config)
             return preview
 
@@ -353,12 +293,11 @@ class Engine:
             active, _ = active_config(self.store, workflow)
             if base_version != active:
                 row = self.store.get("workflow_versions", workflow=workflow, version=active)
-                when = datetime.fromisoformat(row["activated_at"]).strftime("%Y-%m-%d %H:%M UTC")
                 raise VersionConflict(
                     f"Workflow '{workflow}' is at config version {active} (activated by "
-                    f"{row['activated_by']} on {when}), but this edit was previewed against "
-                    f"version {base_version}. Preview it again against version {active}, then "
-                    "activate it."
+                    f"{row['activated_by']} on {when(row['activated_at'])}), but this edit was "
+                    f"previewed against version {base_version}. Preview it again against "
+                    f"version {active}, then activate it."
                 )
             preview, config = prepare_edit(self.store, workflow, new_config)
             if not preview.ok or config is None:
@@ -370,22 +309,20 @@ class Engine:
             )
             if reason.strip():
                 because += f"; {reason}"
-            self.store.append(
-                ev.ConfigActivated(
-                    at=self._now(),
-                    actor=actor,
-                    workflow=workflow,
-                    config_version=preview.new_version,
-                    base_version=active,
-                    config=data,
-                    config_hash=_config_hash(data),
-                    changes=tuple(change.model_dump(mode="json") for change in preview.changes),
-                    diff=preview.diff,
-                    counts=preview.counts(),
-                    warnings=preview.warnings,
-                    reason=reason,
-                    because=because,
-                )
+            self._log(
+                ev.ConfigActivated,
+                actor,
+                workflow=workflow,
+                config_version=preview.new_version,
+                base_version=active,
+                config=data,
+                config_hash=_config_hash(data),
+                changes=tuple(change.model_dump(mode="json") for change in preview.changes),
+                diff=preview.diff,
+                counts=preview.counts(),
+                warnings=preview.warnings,
+                reason=reason,
+                because=because,
             )
             return self.staffing_warnings(workflow)
 
@@ -394,54 +331,22 @@ class Engine:
     def request_work(self, workflow: str, user: str) -> Slot | None:
         """Claim the next slot for this person, or return the one they already hold.
 
-        A person holds at most one claim per workflow. The order: slots in later-listed
-        stages first (so items finish), then the oldest admitted item, then slot index;
-        except that slots of items the person released in that stage come after all the
-        others. Slots of a paused stage or workflow are not handed out. Returns None when
-        nothing is available to this person.
+        A person holds at most one claim per workflow. The order is the default order of
+        ``eligibility``; slots of a paused stage or workflow are not handed out. Returns
+        None when nothing is available to this person.
         """
         _check_text(user, "user")
         with self.store.transaction():
             version, config = active_config(self.store, workflow)
-            mine = self.store.select("slots", workflow=workflow, status="claimed", claimed_by=user)
-            if mine:
-                return Slot.from_row(mine[0])  # a pause does not take a held claim away
+            held = self._held_claim(workflow, user)
+            if held is not None:
+                return Slot.from_row(held)  # a pause does not take a held claim away
             person = load_person(self.store, workflow, user)
-            if not person.roles or active_pause(self.store, workflow) is not None:
+            found = next_slot(self.store, workflow, config, person)
+            if found is None:
                 return None
-            position = {
-                stage.name: i
-                for i, stage in enumerate(config.stages)
-                if active_pause(self.store, workflow, stage.name) is None
-            }
-            candidates = [
-                slot
-                for slot in self.store.select("slots", workflow=workflow, status="open")
-                if slot["stage"] in position
-                and why_not(person, slot, config.stage(slot["stage"]).roles) is None
-            ]
-            if not candidates:
-                return None
-            chosen = min(
-                candidates,
-                key=lambda s: (
-                    offered_last(person, s),
-                    -position[s["stage"]],
-                    s["admitted_seq"],
-                    s["index"],
-                    s["slot"],
-                ),
-            )
-            how = (
-                "asked for work; first eligible open slot in the default order (later stages "
-                "first, then the oldest admitted item)"
-            )
-            if offered_last(person, chosen):
-                how += (
-                    f"; {user} released this item in {chosen['stage']} before, so it was "
-                    "offered only after their other work"
-                )
-            return self._claim(workflow, chosen, person, version, how)
+            slot, how = found
+            return self._claim(workflow, slot, person, version, how)
 
     def claim(self, workflow: str, slot_id: int, user: str) -> Slot:
         """Claim one particular open slot, for an interface that lets people choose.
@@ -453,19 +358,16 @@ class Engine:
         _check_text(user, "user")
         with self.store.transaction():
             version, config = active_config(self.store, workflow)
-            slot = self.store.get("slots", slot=slot_id)
-            if slot is None or slot["workflow"] != workflow:
-                raise UnknownSlot(f"Workflow '{workflow}' has no slot {slot_id}.")
-            mine = self.store.select("slots", workflow=workflow, status="claimed", claimed_by=user)
-            if mine:
+            slot = slot_row(self.store, workflow, slot_id)
+            held = self._held_claim(workflow, user)
+            if held is not None:
                 raise NotAllowed(
-                    f"{user} already holds slot {mine[0]['slot']} in {workflow}; submit or "
+                    f"{user} already holds slot {held['slot']} in {workflow}; submit or "
                     "release it first (one claim per workflow at a time)."
                 )
             if slot["status"] != "open":
                 raise NotAllowed(f"Slot {slot_id} is not open: it is {slot['status']}.")
-            pauses = blocking_pauses(self.store, workflow, slot["stage"])
-            if pauses:
+            if pauses := blocking_pauses(self.store, workflow, slot["stage"]):
                 raise Paused(
                     f"Slot {slot_id} cannot be claimed now: {' and '.join(pauses)}. It can be "
                     "claimed once that is resumed."
@@ -475,6 +377,10 @@ class Engine:
             if reason is not None:
                 raise NotEligible(f"{user} may not claim slot {slot_id}: {reason}.")
             return self._claim(workflow, slot, person, version, "chose this slot")
+
+    def _held_claim(self, workflow: str, user: str) -> Row | None:
+        mine = self.store.select("slots", workflow=workflow, status="claimed", claimed_by=user)
+        return mine[0] if mine else None
 
     def _claim(self, workflow: str, slot: Row, person: Person, version: int, how: str) -> Slot:
         """Log the claim; ``version`` is the config version in force (its roles applied)."""
@@ -487,63 +393,39 @@ class Engine:
         )
         if slot["reserved_for"]:
             because += f"; reserved for {user} by {stage.name}.labels_per_item = all"
-        self.store.append(
-            ev.SlotClaimed(
-                at=self._now(),
-                actor=user,
-                workflow=workflow,
-                stage=slot["stage"],
-                item=slot["item"],
-                config_version=version,
-                slot=slot["slot"],
-                user=user,
-                roles=tuple(sorted(person.roles)),
-                because=because,
-            )
+        self._log(
+            ev.SlotClaimed,
+            user,
+            workflow=workflow,
+            stage=slot["stage"],
+            item=slot["item"],
+            config_version=version,
+            slot=slot["slot"],
+            user=user,
+            roles=tuple(sorted(person.roles)),
+            because=because,
         )
         return Slot.from_row(self.store.get("slots", slot=slot["slot"]))
 
-    def work_packet(self, workflow: str, slot_id: int, user: str) -> WorkPacket:
-        """What the interface should show for a claimed slot.
+    def _my_slot(self, workflow: str, slot_id: int, user: str) -> Row:
+        """The slot, if the person has claimed it."""
+        slot = slot_row(self.store, workflow, slot_id)
+        if slot["status"] == "claimed" and slot["claimed_by"] == user:
+            return slot
+        state = {
+            "open": "it is open; ask for work to claim a slot",
+            "claimed": f"it is claimed by {slot['claimed_by']}",
+            "filled": "it already has its label",
+            "cancelled": "it was cancelled",
+        }[slot["status"]]
+        raise SlotNotYours(f"Slot {slot_id} is not claimed by {user}: {state}.")
 
-        With ``show_prior`` (the default), that includes the item's labels from other stages
-        of this workflow (ids and stages, not labeler names) and the most recent consensus
-        check's detail. Item properties are never included.
-        """
-        with self.store.transaction():
+    def work_packet(self, workflow: str, slot_id: int, user: str) -> WorkPacket:
+        """What the interface should show for a claimed slot (see ``reads.work_packet``)."""
+        with self.store.reading():
             slot = self._my_slot(workflow, slot_id, user)
             _, config = active_config(self.store, workflow)
-            stage = stage_of(config, slot["stage"])
-            item = item_row(self.store, workflow, slot["item"])
-            priors: tuple[PriorLabel, ...] = ()
-            consensus = None
-            if stage.show_prior:
-                priors = tuple(
-                    PriorLabel(label=r["label"], stage=r["stage"], value=r["value"])
-                    for r in labels_of(self.store, workflow, slot["item"])
-                    if r["stage"] != slot["stage"]
-                )
-                checks = self.store.select("consensus", workflow=workflow, item=slot["item"])
-                if checks:
-                    latest = max(checks, key=lambda r: r["seq"])
-                    consensus = ConsensusShown(
-                        stage=latest["stage"],
-                        label_ids=tuple(latest["label_ids"]),
-                        agreed=latest["agreed"],
-                        rule_version=latest["rule_version"],
-                        detail=latest["detail"],
-                    )
-            return WorkPacket(
-                workflow=workflow,
-                slot=slot_id,
-                stage=slot["stage"],
-                item=slot["item"],
-                uri=item["uri"],
-                content_hash=item["content_hash"],
-                show_prior=stage.show_prior,
-                prior_labels=priors,
-                consensus=consensus,
-            )
+            return reads.work_packet(self.store, slot, stage_of(config, slot["stage"]))
 
     def submit(
         self,
@@ -571,99 +453,33 @@ class Engine:
             version, config = active_config(self.store, workflow)
             stage = stage_of(config, slot["stage"])
             task = self.label_tasks.get(workflow_row(self.store, workflow)["label_task"])
-            if not isinstance(label, dict):
-                raise InvalidLabel([f"a label must be a JSON object, not {type(label).__name__}"])
-            try:
-                label = _JSON_DICT.validate_python(label)
-                task.validate(label)
-            except ValidationError:
-                raise InvalidLabel(["the label must contain only JSON values"]) from None
-            except LabelValidationError as error:
-                raise InvalidLabel(error.problems) from error
-            self._check_shown(workflow, slot, self._could_show_prior(slot, version), shown)
-            at = self._now()
+            label = _checked_label(task, label)
+            check_shown(self.store, slot, version, shown)
             label_id = next_id(self.store, "label")
-            self.store.append(
-                ev.LabelSubmitted(
-                    at=at,
-                    actor=user,
-                    workflow=workflow,
-                    stage=slot["stage"],
-                    item=slot["item"],
-                    config_version=version,
-                    slot=slot_id,
-                    label_id=label_id,
-                    user=user,
-                    roles=tuple(sorted(held_roles(self.store, user))),
-                    label=label,
-                    shown=shown,
-                    label_task=task.ref,
-                    ontology_version=task.ontology_version,
-                    duration_ms=duration_ms,
-                    because=f"{user} submitted the label for slot {slot_id} of {slot['stage']}",
-                )
-            )
+            at = self._log(
+                ev.LabelSubmitted,
+                user,
+                workflow=workflow,
+                stage=slot["stage"],
+                item=slot["item"],
+                config_version=version,
+                slot=slot_id,
+                label_id=label_id,
+                user=user,
+                roles=tuple(sorted(held_roles(self.store, user))),  # at the submit; the
+                # roles held at the claim come from the slot (labels.roles_at_claim)
+                label=label,
+                shown=shown,
+                label_task=task.ref,
+                ontology_version=task.ontology_version,
+                duration_ms=duration_ms,
+                because=f"{user} submitted the label for slot {slot_id} of {slot['stage']}",
+            ).at
             flow = self._flow(workflow, at, version)
             if stage.score_against:
                 flow.score(stage, slot["item"], label_id, user, label)
-            flow.slots_closed(slot["stage"], slot["item"])
+            flow.label_submitted(slot["stage"], slot["item"], user)
             return label_id
-
-    def _could_show_prior(self, slot: Row, version: int) -> bool:
-        """Whether the interface may have shown earlier labels for this claimed slot.
-
-        That is so if the slot's stage shows them under the version in force now, or under
-        any version since the slot was claimed: an edit that makes the stage blind must not
-        reject a label whose author was legitimately shown earlier labels before it.
-        """
-        workflow, stage = slot["workflow"], slot["stage"]
-        if config_at(self.store, workflow, version).stage(stage).show_prior:
-            return True
-        claims = [
-            e
-            for e in self.store.events(workflow=workflow, item=slot["item"])
-            if isinstance(e, ev.SlotClaimed) and e.slot == slot["slot"]
-        ]
-        since = claims[-1].config_version if claims else version
-        for earlier in range(since or version, version):
-            config = config_at(self.store, workflow, earlier)
-            if stage in config.stage_names and config.stage(stage).show_prior:
-                return True
-        return False
-
-    def _check_shown(self, workflow: str, slot: Row, stage_shows_prior: bool, shown: Shown) -> None:
-        """Check that what the interface reports showing fits the item and its labels."""
-        item = slot["item"]
-        content_hash = item_row(self.store, workflow, item)["content_hash"]
-        if shown.content_hash != content_hash:
-            raise InvalidShown(
-                f"The interface reports showing content {shown.content_hash}, but item {item} "
-                f"has content hash {content_hash}."
-            )
-        if shown.prior_label_ids:
-            if not shown.show_prior:
-                raise InvalidShown("Earlier labels are reported as shown, but show_prior is false.")
-            if not stage_shows_prior:
-                raise InvalidShown(
-                    f"Stage {slot['stage']} is blind (show_prior: false), but the interface "
-                    "reports showing earlier labels."
-                )
-            known = {r["label"] for r in labels_of(self.store, workflow, item)}
-            strangers = [i for i in shown.prior_label_ids if i not in known]
-            if strangers:
-                raise InvalidShown(
-                    f"Label(s) {and_list(map(str, strangers))} are not labels of item {item} in "
-                    f"workflow {workflow}."
-                )
-        if shown.consensus_rule_version is not None:
-            rules = {
-                r["rule_version"]
-                for r in self.store.select("consensus", workflow=workflow, item=item)
-            }
-            if shown.consensus_rule_version not in rules:
-                raise InvalidShown(
-                    f"No consensus check on item {item} used rule {shown.consensus_rule_version}."
-                )
 
     def release(self, workflow: str, slot_id: int, user: str, reason: str) -> None:
         """Give a claimed slot back to the pool, with a reason.
@@ -676,19 +492,17 @@ class Engine:
         with self.store.transaction():
             slot = self._my_slot(workflow, slot_id, user)
             version, _ = active_config(self.store, workflow)
-            self.store.append(
-                ev.SlotReleased(
-                    at=self._now(),
-                    actor=user,
-                    workflow=workflow,
-                    stage=slot["stage"],
-                    item=slot["item"],
-                    config_version=version,
-                    slot=slot_id,
-                    user=user,
-                    reason=reason,
-                    because=f"released by {user}: {reason}",
-                )
+            self._log(
+                ev.SlotReleased,
+                user,
+                workflow=workflow,
+                stage=slot["stage"],
+                item=slot["item"],
+                config_version=version,
+                slot=slot_id,
+                user=user,
+                reason=reason,
+                because=f"released by {user}: {reason}",
             )
 
     # --- admins ---------------------------------------------------------------------------
@@ -716,17 +530,15 @@ class Engine:
             because = f"excluded by {actor}: {reason}"
             if row["status"] == "done":
                 because += "; its earlier final label is kept as history"
-            self.store.append(
-                ev.ItemExcluded(
-                    at=self._now(),
-                    actor=actor,
-                    workflow=workflow,
-                    item=item,
-                    config_version=version,
-                    reason=reason,
-                    cancelled_slots=cancelled,
-                    because=because,
-                )
+            self._log(
+                ev.ItemExcluded,
+                actor,
+                workflow=workflow,
+                item=item,
+                config_version=version,
+                reason=reason,
+                cancelled_slots=cancelled,
+                because=because,
             )
             return list(cancelled)
 
@@ -742,28 +554,27 @@ class Engine:
         with self.store.transaction():
             version, config = active_config(self.store, workflow)
             stage_of(config, stage)
+            by_item: dict[str, list[int]] = {}
             open_slots = self.store.select("slots", workflow=workflow, stage=stage, status="open")
-            by_item: dict[str, list[Row]] = {}
             for slot in sorted(open_slots, key=lambda s: (s["admitted_seq"], s["index"])):
-                by_item.setdefault(slot["item"], []).append(slot)
+                by_item.setdefault(slot["item"], []).append(slot["slot"])
             at = self._now()
             flow = self._flow(workflow, at, version)
             for item, slots in by_item.items():
-                self.store.append(
-                    ev.SlotsCancelled(
-                        at=at,
-                        actor=actor,
-                        workflow=workflow,
-                        stage=stage,
-                        item=item,
-                        config_version=version,
-                        reason=reason,
-                        slots=tuple(s["slot"] for s in slots),
-                        because=f"cancelled by {actor}: {reason}",
-                    )
+                self._log(
+                    ev.SlotsCancelled,
+                    actor,
+                    at=at,
+                    workflow=workflow,
+                    stage=stage,
+                    item=item,
+                    config_version=version,
+                    reason=reason,
+                    slots=tuple(slots),
+                    because=f"cancelled by {actor}: {reason}",
                 )
                 flow.slots_closed(stage, item)
-            return [s["slot"] for slots in by_item.values() for s in slots]
+            return [slot for slots in by_item.values() for slot in slots]
 
     def pause_workflow(self, workflow: str, actor: str | None, reason: str) -> None:
         """Stop all claims in the workflow until it is resumed.
@@ -808,22 +619,19 @@ class Engine:
                 because = f"paused by {actor}: {reason}; no slot of the {what} can be claimed"
             else:
                 kind = ev.StageResumed if stage else ev.WorkflowResumed
-                because = f"resumed by {actor}: {reason}; " + self._still_paused(
-                    workflow, stage, config.stage_names, what
-                )
-            self.store.append(
-                kind(
-                    at=self._now(),
-                    actor=actor,
-                    workflow=workflow,
-                    stage=stage,
-                    config_version=version,
-                    reason=reason,
-                    because=because,
-                )
+                opened = self._resume_text(workflow, stage, config.stage_names, what)
+                because = f"resumed by {actor}: {reason}; {opened}"
+            self._log(
+                kind,
+                actor,
+                workflow=workflow,
+                stage=stage,
+                config_version=version,
+                reason=reason,
+                because=because,
             )
 
-    def _still_paused(
+    def _resume_text(
         self, workflow: str, stage: str | None, stages: tuple[str, ...], what: str
     ) -> str:
         """What a resume opens up, given that the other kind of pause stays as it is."""
@@ -836,54 +644,162 @@ class Engine:
             return f"slots can be claimed again, except in paused stage(s) {and_list(paused)}"
         return f"slots of the {what} can be claimed again"
 
-    # --- reads ----------------------------------------------------------------------------
+    def _log(self, kind: type[Event], actor: str | None, **fields: Any) -> Event:
+        """Append one event of this command, stamped with the command's time unless given."""
+        fields.setdefault("at", self._now())
+        return self.store.append(kind(actor=actor, **fields))
+
+    # --- reads: the project ---------------------------------------------------------------
+
+    def roles(self) -> list[Role]:
+        """Every role, in the order defined, with who holds it now."""
+        with self.store.reading():
+            return reads.roles(self.store)
+
+    def role(self, name: str) -> Role:
+        with self.store.reading():
+            return reads.role(self.store, name)
+
+    def user_roles(self, user: str) -> set[str]:
+        """The roles the person holds now."""
+        with self.store.reading():
+            return held_roles(self.store, user)
+
+    def holds_a_claim(self, user: str) -> bool:
+        """Whether the person holds a claim in any workflow of the project.
+
+        A claim outlives a role change: whoever held the role when they claimed may still
+        submit or release it.
+        """
+        with self.store.reading():
+            return bool(self.store.select("slots", status="claimed", claimed_by=user))
+
+    def datasets(self) -> list[Dataset]:
+        """Every dataset, in the order created, with its number of items."""
+        with self.store.reading():
+            return reads.datasets(self.store)
+
+    def dataset(self, name: str) -> Dataset:
+        with self.store.reading():
+            return reads.dataset(self.store, name)
+
+    def items(self, dataset: str, offset: int = 0, limit: int = 100) -> Page[Item]:
+        """One page of a dataset's items, in import order."""
+        with self.store.reading():
+            return reads.items(self.store, dataset, offset, limit)
+
+    def validation_context(self) -> ValidationContext:
+        """What a new config is checked against: the roles and their holders, the datasets
+        and the registered label tasks."""
+        with self.store.reading():
+            return ValidationContext(
+                roles=role_holders(self.store),
+                datasets=[row["dataset"] for row in self.store.select("datasets")],
+                label_tasks=self.label_tasks.refs(),
+            )
+
+    def events(
+        self,
+        offset: int = 0,
+        limit: int = 100,
+        *,
+        workflow: str | None = None,
+        item: str | None = None,
+        type: str | None = None,
+    ) -> Page[Event]:
+        """One page of the project's event log, oldest first (the audit view)."""
+        with self.store.reading():
+            return reads.event_page(self.store, offset, limit, workflow, item, type)
+
+    # --- reads: workflows -----------------------------------------------------------------
+
+    def workflows(self) -> list[Workflow]:
+        """Every workflow, in the order started, with its stages and what is paused."""
+        with self.store.reading():
+            return reads.workflows(self.store)
+
+    def workflow(self, name: str) -> WorkflowDetail:
+        """A workflow as it runs now: its config in force, progress and pauses."""
+        with self.store.reading():
+            return reads.workflow(self.store, name)
+
+    def progress(self, workflow: str) -> Progress:
+        """Items by status and slots by stage."""
+        with self.store.reading():
+            return reads.progress(self.store, workflow)
 
     def pauses(self, workflow: str) -> PauseState:
         """What is paused in the workflow now: the workflow itself, and each stage."""
-        with self.store.transaction():
+        with self.store.reading():
+            return reads.pauses(self.store, workflow)
+
+    def config_versions(self, workflow: str) -> list[ConfigVersion]:
+        """Every config version of the workflow, oldest first, with who activated it and why."""
+        with self.store.reading():
+            return reads.config_versions(self.store, workflow)
+
+    def staffing_warnings(self, workflow: str) -> list[str]:
+        """Stages that the people holding their roles cannot fill, in plain language."""
+        with self.store.reading():
             _, config = active_config(self.store, workflow)
-            return PauseState(
-                workflow=workflow,
-                paused=Pause.from_row(active_pause(self.store, workflow)),
-                stages={
-                    name: Pause.from_row(active_pause(self.store, workflow, name))
-                    for name in config.stage_names
-                },
-            )
+            holders = role_holders(self.store)
+            return [f"workflow {workflow}, {problem}" for problem in role_warnings(config, holders)]
+
+    def _all_staffing_warnings(self) -> list[str]:
+        running = self.store.select("workflows", status="running")
+        return [w for row in running for w in self.staffing_warnings(row["workflow"])]
 
     def slot(self, workflow: str, slot_id: int) -> Slot:
-        with self.store.transaction():
-            workflow_row(self.store, workflow)
-            row = self.store.get("slots", slot=slot_id)
-            if row is None or row["workflow"] != workflow:
-                raise UnknownSlot(f"Workflow '{workflow}' has no slot {slot_id}.")
-            return Slot.from_row(row)
+        with self.store.reading():
+            return Slot.from_row(slot_row(self.store, workflow, slot_id))
 
     def explain(self, workflow: str, item: str) -> Explanation:
         """Why the item went where it went, and why it is waiting, if it is."""
-        with self.store.transaction():
+        with self.store.reading():
             return explain(self.store, workflow, item)
 
     def export_items(self, workflow: str) -> list[dict[str, Any]]:
-        with self.store.transaction():
+        with self.store.reading():
             return export_items(self.store, workflow)
 
     def export_labels(self, workflow: str) -> list[dict[str, Any]]:
-        with self.store.transaction():
+        with self.store.reading():
             return export_labels(self.store, workflow)
 
     def score_report(self, workflow: str) -> list[dict[str, Any]]:
-        with self.store.transaction():
+        with self.store.reading():
             return score_report(self.store, workflow)
 
     def sampling_report(self, workflow: str) -> list[dict[str, Any]]:
-        with self.store.transaction():
+        with self.store.reading():
             return sampling_report(self.store, workflow)
+
+
+def _checked_label(task: Any, label: Any) -> dict[str, Any]:
+    """The label in the task's normal form, or InvalidLabel with every problem."""
+    if not isinstance(label, dict):
+        raise InvalidLabel([f"a label must be a JSON object, not {type(label).__name__}"])
+    try:
+        plain = _JSON_DICT.validate_python(label)
+    except ValidationError:
+        raise InvalidLabel(["the label must contain only JSON values"]) from None
+
+    def validate() -> dict[str, Any]:
+        try:
+            return task.validate(plain)
+        except LabelValidationError as error:
+            raise InvalidLabel(error.problems) from error
+
+    return ask_task(task, "validating the label", validate)
 
 
 def _config_hash(data: Mapping[str, Any]) -> str:
     """The fingerprint of a config version: the SHA-256 of its canonical JSON."""
     return hashlib.sha256(canonical_json(data).encode()).hexdigest()
+
+
+def _seq(row: Row) -> int:
+    return row["seq"]
 
 
 def _check_text(value: object, what: str) -> None:

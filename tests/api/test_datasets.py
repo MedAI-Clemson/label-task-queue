@@ -3,12 +3,9 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import replace
 
 import pytest
-from fastapi.testclient import TestClient
 
-from labelflow.api import create_app
 from labelflow.engine import Engine
 
 
@@ -35,14 +32,17 @@ def test_a_bad_dataset_name_is_refused(admin, project):
     assert response.status_code == 422
 
 
+# --- listing items -----------------------------------------------------------------------
+
+
 def test_items_are_listed_a_page_at_a_time(admin, project, expect):
     first = expect(admin.get(f"{project}/datasets/batch1/items?limit=5"))
     assert (first["total"], first["limit"], first["offset"]) == (20, 5, 0)
-    assert [i["item"] for i in first["items"]] == [f"img_{n:03d}" for n in range(1, 6)]
+    assert [i["item"] for i in first["rows"]] == [f"img_{n:03d}" for n in range(1, 6)]
     last = expect(admin.get(f"{project}/datasets/batch1/items?limit=5&offset=18"))
-    assert [i["item"] for i in last["items"]] == ["img_019", "img_020"]
+    assert [i["item"] for i in last["rows"]] == ["img_019", "img_020"]
     beyond = expect(admin.get(f"{project}/datasets/batch1/items?offset=100"))
-    assert beyond["items"] == []
+    assert beyond["rows"] == []
     assert beyond["total"] == 20
 
 
@@ -50,8 +50,9 @@ def test_an_item_is_listed_with_everything_recorded_about_it(admin, project, mak
     expect(admin.post(f"{project}/datasets", {"name": "gold"}), 201)
     items = make_items(1, gold_key="cat", batch=3)
     expect(admin.post(f"{project}/datasets/gold/items", {"items": items}), 201)
-    item = expect(admin.get(f"{project}/datasets/gold/items"))["items"][0]
+    item = expect(admin.get(f"{project}/datasets/gold/items"))["rows"][0]
     assert item == {
+        "dataset": "gold",
         "item": "img_001",
         "uri": "https://images.example.org/img_001.png",
         "content_hash": items[0]["content_hash"],
@@ -68,36 +69,29 @@ def test_a_bad_page_is_refused(admin, project, query):
     assert response.json()["detail"].startswith("The request is not valid.")
 
 
-def test_listing_the_items_of_an_unknown_dataset(admin, project):
-    response = admin.get(f"{project}/datasets/batch9/items")
-    assert response.status_code == 404
-    assert response.json()["detail"] == "There is no dataset named 'batch9'. Did you mean 'batch1'?"
+def test_an_unknown_dataset_is_not_found(admin, project, make_items):
+    listing = admin.get(f"{project}/datasets/batch9/items")
+    assert listing.status_code == 404
+    assert listing.json()["detail"] == "There is no dataset named 'batch9'. Did you mean 'batch1'?"
+    importing = admin.post(f"{project}/datasets/nope/items", {"items": make_items(1)})
+    assert importing.status_code == 404
 
 
-def test_importing_into_an_unknown_dataset(admin, project, make_items):
-    response = admin.post(f"{project}/datasets/nope/items", {"items": make_items(1)})
-    assert response.status_code == 404
+# --- hashing at import -------------------------------------------------------------------
 
 
-def test_the_server_hashes_a_file_uri_inside_the_media_folder(admin, project, media, expect):
-    (media / "a.png").write_bytes(b"pixels of a")
-    item = {"item": "a", "uri": (media / "a.png").as_uri()}
-    expect(admin.post(f"{project}/datasets/batch1/items", {"items": [item]}), 201)
-    stored = expect(admin.get(f"{project}/datasets/batch1/items?offset=20"))["items"][0]
-    assert stored["content_hash"] == hashlib.sha256(b"pixels of a").hexdigest()
-    assert stored["uri"] == item["uri"]  # the address is kept as given
-
-
-def test_the_server_hashes_a_path_inside_the_media_folder(admin, project, media, expect):
+def test_the_server_hashes_a_file_inside_the_media_folder(admin, project, media, expect):
     (media / "scans").mkdir()
     (media / "scans" / "b.png").write_bytes(b"pixels of b")
     items = [
+        {"item": "as_uri", "uri": (media / "scans" / "b.png").as_uri()},
         {"item": "relative", "uri": "scans/b.png"},
         {"item": "absolute", "uri": str(media / "scans" / "b.png")},
     ]
     expect(admin.post(f"{project}/datasets/batch1/items", {"items": items}), 201)
-    stored = expect(admin.get(f"{project}/datasets/batch1/items?offset=20"))["items"]
+    stored = expect(admin.get(f"{project}/datasets/batch1/items?offset=20"))["rows"]
     assert {i["content_hash"] for i in stored} == {hashlib.sha256(b"pixels of b").hexdigest()}
+    assert [i["uri"] for i in stored] == [i["uri"] for i in items]  # kept as given
 
 
 def test_a_given_hash_is_kept_and_written_in_lower_case(admin, project, media, expect):
@@ -105,7 +99,7 @@ def test_a_given_hash_is_kept_and_written_in_lower_case(admin, project, media, e
     claimed = "AB" * 32
     item = {"item": "c", "uri": (media / "c.png").as_uri(), "content_hash": claimed}
     expect(admin.post(f"{project}/datasets/batch1/items", {"items": [item]}), 201)
-    stored = expect(admin.get(f"{project}/datasets/batch1/items?offset=20"))["items"][0]
+    stored = expect(admin.get(f"{project}/datasets/batch1/items?offset=20"))["rows"][0]
     assert stored["content_hash"] == "ab" * 32  # the server does not check a hash it is given
 
 
@@ -116,6 +110,7 @@ def test_a_given_hash_is_kept_and_written_in_lower_case(admin, project, media, e
         ("s3://bucket/x.png", "is not a file on the server"),
         ("file://other-host/data/x.png", "is a file on another computer"),
         ("file:///etc/hostname", "is outside the server's media folder"),
+        ("/etc/hostname", "is outside the server's media folder"),
         ("../outside.png", "is outside the server's media folder"),
         ("missing.png", "no file was found"),
         ("scans", "no file was found"),
@@ -142,25 +137,28 @@ def test_a_link_out_of_the_media_folder_is_refused(admin, project, media, tmp_pa
     assert "outside the server's media folder" in response.json()["problems"][0]
 
 
-def test_without_a_media_folder_a_relative_path_cannot_be_hashed(
-    settings, label_tasks, tmp_path, password
-):
-    app = create_app(replace(settings, media_root=None), label_tasks=label_tasks)
-    with TestClient(app) as client:
-        client.app.state.runtime.accounts.create("root", password, is_admin=True)
-        token = client.app.state.runtime.identity.login("root", password).token
-        headers = {"Authorization": f"Bearer {token}"}
-        client.post("/projects", json={"name": "xray"}, headers=headers)
-        client.post("/projects/xray/datasets", json={"name": "d"}, headers=headers)
-        (tmp_path / "x.png").write_bytes(b"x")
-        body = {"items": [{"item": "rel", "uri": "x.png"}]}
-        response = client.post("/projects/xray/datasets/d/items", json=body, headers=headers)
-        assert response.status_code == 422
-        assert "no media folder" in response.json()["problems"][0]
-        # a file:// address is still hashed (the server is not told to keep to a folder)
-        body = {"items": [{"item": "abs", "uri": (tmp_path / "x.png").as_uri()}]}
-        response = client.post("/projects/xray/datasets/d/items", json=body, headers=headers)
-        assert response.status_code == 201
+def test_without_a_media_folder_the_server_hashes_nothing(app_with, tmp_path, expect):
+    """Default deny: without LABELFLOW_MEDIA_ROOT, every item must bring its hash."""
+    root, _ = app_with(media_root=None)
+    expect(root.post("/projects", {"name": "xray"}), 201)
+    expect(root.post("/projects/xray/datasets", {"name": "d"}), 201)
+    (tmp_path / "x.png").write_bytes(b"x")
+    items = [
+        {"item": "relative", "uri": "x.png"},
+        {"item": "absolute", "uri": str(tmp_path / "x.png")},
+        {"item": "as_uri", "uri": (tmp_path / "x.png").as_uri()},
+    ]
+    response = root.post("/projects/xray/datasets/d/items", {"items": items})
+    assert response.status_code == 422
+    assert len(response.json()["problems"]) == 3
+    for problem in response.json()["problems"]:
+        assert "the server has no media folder, so it does not hash files" in problem
+        assert "Give `content_hash`" in problem
+    with_hash = [item | {"content_hash": "ab" * 32} for item in items]
+    expect(root.post("/projects/xray/datasets/d/items", {"items": with_hash}), 201)
+
+
+# --- the batch is all or nothing ---------------------------------------------------------
 
 
 def test_a_bad_batch_imports_nothing_and_lists_every_problem(
@@ -197,20 +195,21 @@ def test_a_long_list_of_problems_is_cut_short(admin, project):
 def test_a_failure_part_way_through_imports_nothing(
     admin, project, make_items, expect, monkeypatch
 ):
-    original = Engine.import_item
-    calls = []
+    original = Engine._log
+    logged = []
 
-    def flaky(self, *args, **kwargs):
-        calls.append(args[1])
-        if len(calls) == 3:
-            raise RuntimeError("the disk is full")
-        return original(self, *args, **kwargs)
+    def flaky(self, kind, actor, **fields):
+        if kind.__name__ == "ItemImported":
+            logged.append(fields["item"])
+            if len(logged) == 3:
+                raise RuntimeError("the disk is full")
+        return original(self, kind, actor, **fields)
 
-    monkeypatch.setattr(Engine, "import_item", flaky)
+    monkeypatch.setattr(Engine, "_log", flaky)
     with pytest.raises(RuntimeError, match="the disk is full"):
         admin.post(f"{project}/datasets/batch1/items", {"items": make_items(5, start=100)})
-    monkeypatch.setattr(Engine, "import_item", original)
-    assert calls == ["img_100", "img_101", "img_102"]
+    monkeypatch.setattr(Engine, "_log", original)
+    assert logged == ["img_100", "img_101", "img_102"]
     assert expect(admin.get(f"{project}/datasets/batch1/items"))["total"] == 20
 
 

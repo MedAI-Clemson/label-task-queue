@@ -86,11 +86,24 @@ def test_explaining_a_finished_item(admin, reviewed, expect):
     assert "final label" in result["text"]
 
 
-def test_explaining_an_unknown_item_or_workflow(admin, workflow, project):
-    item = admin.get(f"{workflow}/items/nope/explain")
-    assert item.status_code == 404
-    assert item.json()["detail"] == "Item 'nope' is not in workflow 'xray_main'."
-    assert admin.get(f"{project}/workflows/nope/items/img_001/explain").status_code == 404
+def test_explaining_an_unknown_item(admin, workflow):
+    response = admin.get(f"{workflow}/items/nope/explain")
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Item 'nope' is not in workflow 'xray_main'."
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "items/img_001/explain",
+        "reports/scores",
+        "reports/sampling",
+        "exports/items",
+        "exports/labels",
+    ],
+)
+def test_feedback_on_an_unknown_workflow(admin, project, path):
+    assert admin.get(f"{project}/workflows/nope/{path}").status_code == 404
 
 
 # --- reports -----------------------------------------------------------------------------
@@ -130,11 +143,6 @@ def test_the_sampling_report(admin, reviewed, expect):
     assert review["rate"] == review["admitted"] / 5
     per_labeler = [r for r in rows if r["upstream_labeler"] == "ana"]
     assert [r["stage"] for r in per_labeler] == ["expert_review"]
-
-
-def test_the_reports_of_an_unknown_workflow(admin, project):
-    for report in ("scores", "sampling"):
-        assert admin.get(f"{project}/workflows/nope/reports/{report}").status_code == 404
 
 
 # --- exports -----------------------------------------------------------------------------
@@ -238,22 +246,13 @@ def test_the_csv_is_the_default_and_the_format_is_checked(admin, workflow):
     assert response.json()["detail"].startswith("The request is not valid.")
 
 
-def test_exporting_an_unknown_workflow(admin, project):
-    for table in ("items", "labels"):
-        assert admin.get(f"{project}/workflows/nope/exports/{table}").status_code == 404
-
-
-def test_a_value_with_commas_and_quotes_survives_the_csv(admin, project, make_items, ana, expect):
+def test_a_value_with_commas_and_quotes_survives_the_csv(
+    admin, project, make_items, one_stage, expect
+):
     expect(admin.post(f"{project}/datasets", {"name": "odd"}), 201)
     item = make_items(1)[0] | {"item": 'a,"b"', "uri": "https://x.org/a,b.png"}
     expect(admin.post(f"{project}/datasets/odd/items", {"items": [item]}), 201)
-    config = {
-        "workflow": "oddly",
-        "dataset": "odd",
-        "label_task": "standin@1",
-        "stages": [{"name": "annotate", "assign_to": "annotator"}],
-    }
-    expect(admin.post(f"{project}/workflows", {"config": config}), 201)
+    expect(admin.post(f"{project}/workflows", {"config": one_stage("oddly", "odd")}), 201)
     rows = read_csv(admin.get(f"{project}/workflows/oddly/exports/items"))
     assert (rows[0]["item"], rows[0]["uri"]) == ('a,"b"', "https://x.org/a,b.png")
 
@@ -266,22 +265,23 @@ def test_the_audit_view_pages_through_the_log(admin, workflow, project, expect):
     assert first["limit"] == 10
     assert first["offset"] == 0
     assert first["total"] > 40  # roles, a dataset, 20 imports, the workflow, 20 admissions...
-    assert [e["seq"] for e in first["events"]] == list(range(1, 11))
+    assert [e["seq"] for e in first["rows"]] == list(range(1, 11))
     second = expect(admin.get(f"{project}/events?limit=10&offset=10"))
-    assert [e["seq"] for e in second["events"]] == list(range(11, 21))
-    assert first["events"][0]["type"] == "role_defined"
-    assert all(e["because"] for e in first["events"])
+    assert [e["seq"] for e in second["rows"]] == list(range(11, 21))
+    assert first["rows"][0]["type"] == "role_defined"
+    assert all(e["because"] for e in first["rows"])
 
 
 def test_the_audit_view_can_be_filtered(admin, reviewed, project, expect):
     workflow_events = expect(admin.get(f"{project}/events?workflow=xray_main&limit=500"))
-    assert {e["workflow"] for e in workflow_events["events"]} == {"xray_main"}
+    assert {e["workflow"] for e in workflow_events["rows"]} == {"xray_main"}
     one_item = expect(admin.get(f"{project}/events?item=img_001&limit=500"))
-    assert {e["item"] for e in one_item["events"]} == {"img_001"}
+    assert {e["item"] for e in one_item["rows"]} == {"img_001"}
     labels = expect(admin.get(f"{project}/events?type=label_submitted&workflow=xray_main"))
-    assert labels["total"] == len(labels["events"]) >= 5
+    assert labels["total"] == len(labels["rows"]) >= 5
+    assert all("label" in e and "shown" in e for e in labels["rows"])  # every field of the event
     nothing = expect(admin.get(f"{project}/events?type=no_such_type"))
-    assert (nothing["total"], nothing["events"]) == (0, [])
+    assert (nothing["total"], nothing["rows"]) == (0, [])
 
 
 @pytest.mark.parametrize("query", ["limit=0", "limit=501", "offset=-1"])

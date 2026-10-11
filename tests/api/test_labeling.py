@@ -57,17 +57,16 @@ def test_there_is_no_work_for_someone_without_a_matching_role(dr_smith, workflow
     assert response.content == b""
 
 
-def test_there_is_no_work_for_a_stranger(new_person, workflow):
-    assert new_person("stranger").post(f"{workflow}/next").status_code == 204
+def test_a_stranger_to_the_project_does_not_find_it(new_person, workflow):
+    response = new_person("stranger").post(f"{workflow}/next")
+    assert response.status_code == 404
+    assert response.json()["detail"] == "There is no project named 'xray'."
 
 
-def test_asking_for_work_in_an_unknown_workflow(ana, project):
+def test_asking_for_work_in_an_unknown_workflow_or_project(ana, project):
     response = ana.post(f"{project}/workflows/nope/next")
     assert response.status_code == 404
     assert response.json()["detail"] == "There is no workflow named 'nope'."
-
-
-def test_asking_for_work_in_an_unknown_project(ana, project):
     assert ana.post("/projects/nope/workflows/xray_main/next").status_code == 404
 
 
@@ -100,6 +99,9 @@ def test_item_properties_are_never_shown_to_a_labeler(admin, ana, project, make_
     assert "secret-answer" not in json.dumps(work)
 
 
+# --- submit ------------------------------------------------------------------------------
+
+
 def test_submitting_a_label(ana, workflow, expect):
     work = expect(ana.post(f"{workflow}/next"))
     slot = work["slot"]["slot"]
@@ -110,11 +112,24 @@ def test_submitting_a_label(ana, workflow, expect):
     assert nxt["slot"]["item"] == "img_002"
 
 
+def test_a_held_claim_can_be_finished_after_losing_every_role(
+    admin, ana, workflow, project, expect
+):
+    """A claim outlives a role change (decided), even when it was the person's last role."""
+    work = expect(ana.post(f"{workflow}/next"))
+    slot = work["slot"]["slot"]
+    expect(admin.post(f"{project}/roles/annotator/revoke", {"user": "ana", "reason": "moved on"}))
+    body = {"label": {"value": "cat"}, "shown": work["shown"], "duration_ms": 1000}
+    assert expect(ana.post(f"{workflow}/slots/{slot}/submit", body), 201) == {"label_id": 1}
+    # with no role and no claim left, the project is out of reach again
+    assert ana.post(f"{workflow}/next").status_code == 404
+
+
 def test_a_submitted_label_is_recorded_with_what_was_shown(admin, ana, workflow, project, expect):
     work = expect(ana.post(f"{workflow}/next"))
     body = {"label": {"value": "cat"}, "shown": work["shown"], "duration_ms": 4200}
     expect(ana.post(f"{workflow}/slots/{work['slot']['slot']}/submit", body), 201)
-    (event,) = expect(admin.get(f"{project}/events?type=label_submitted"))["events"]
+    (event,) = expect(admin.get(f"{project}/events?type=label_submitted"))["rows"]
     assert event["user"] == "ana"
     assert event["roles"] == ["annotator"]
     assert event["duration_ms"] == 4200
@@ -165,24 +180,17 @@ def test_what_was_shown_must_match_the_item(ana, workflow):
         {"label": None},
         {"shown": {"content_hash": "x"}},
         {"shown": None},
+        {"shown": {"extra": 1}},  # shown cannot carry extra keys
     ],
 )
 def test_a_malformed_submission_is_refused(ana, workflow, mistake):
     work = ana.post(f"{workflow}/next").json()
+    if mistake.get("shown") and "extra" in mistake["shown"]:
+        mistake = {"shown": work["shown"] | mistake["shown"]}
     body = {"label": {"value": "cat"}, "shown": work["shown"]} | mistake
     response = ana.post(f"{workflow}/slots/{work['slot']['slot']}/submit", body)
     assert response.status_code == 422, mistake
     assert response.json()["detail"].startswith("The request is not valid")
-
-
-def test_shown_cannot_carry_extra_keys(ana, workflow):
-    work = ana.post(f"{workflow}/next").json()
-    shown = work["shown"] | {"extra": 1}
-    response = ana.post(
-        f"{workflow}/slots/{work['slot']['slot']}/submit",
-        {"label": {"value": "cat"}, "shown": shown},
-    )
-    assert response.status_code == 422
 
 
 def test_a_slot_that_is_not_yours_cannot_be_submitted(ana, ben, workflow):
@@ -208,6 +216,9 @@ def test_submitting_to_an_unknown_slot(ana, workflow):
     assert ana.post(f"{workflow}/slots/9999/submit", body).status_code == 404
 
 
+# --- release and claim -------------------------------------------------------------------
+
+
 def test_releasing_a_slot(ana, workflow, expect):
     work = expect(ana.post(f"{workflow}/next"))
     slot = work["slot"]["slot"]
@@ -225,11 +236,10 @@ def test_a_released_slot_can_be_taken_by_someone_else(ana, ben, workflow, expect
     assert expect(ben.post(f"{workflow}/next"))["slot"]["slot"] == slot
 
 
-def test_releasing_needs_a_reason(ana, workflow):
+@pytest.mark.parametrize("body", [{}, {"reason": ""}, {"reason": "  "}])
+def test_releasing_needs_a_reason(ana, workflow, body):
     slot = ana.post(f"{workflow}/next").json()["slot"]["slot"]
-    assert ana.post(f"{workflow}/slots/{slot}/release", {}).status_code == 422
-    assert ana.post(f"{workflow}/slots/{slot}/release", {"reason": ""}).status_code == 422
-    assert ana.post(f"{workflow}/slots/{slot}/release", {"reason": "  "}).status_code == 422
+    assert ana.post(f"{workflow}/slots/{slot}/release", body).status_code == 422
 
 
 def test_releasing_someone_elses_slot(ana, ben, workflow):
@@ -286,6 +296,9 @@ def test_claiming_an_unknown_slot(ana, workflow):
     assert ana.post(f"{workflow}/slots/9999/claim").status_code == 404
 
 
+# --- review stages -----------------------------------------------------------------------
+
+
 def test_a_reviewer_sees_the_earlier_label(admin, project, ana, dr_smith, label_with, expect):
     expect(admin.post(f"{project}/workflows", {"config": REVIEW_CHECKED}), 201)
     flow = f"{project}/workflows/checked"
@@ -301,7 +314,19 @@ def test_a_reviewer_sees_the_earlier_label(admin, project, ana, dr_smith, label_
     expect(dr_smith.post(f"{flow}/slots/{work['slot']['slot']}/submit", body), 201)
 
 
-def test_a_reviewer_may_report_less_than_the_packet_held(
+def test_a_reviewer_may_report_fewer_prior_labels_than_the_packet_held(
+    admin, project, ana, dr_smith, label_with, expect
+):
+    expect(admin.post(f"{project}/workflows", {"config": REVIEW_CHECKED}), 201)
+    flow = f"{project}/workflows/checked"
+    label_with(ana, flow, "cat")
+    work = expect(dr_smith.post(f"{flow}/next"))
+    shown = work["shown"] | {"prior_label_ids": []}
+    body = {"label": {"value": "dog"}, "shown": shown}
+    expect(dr_smith.post(f"{flow}/slots/{work['slot']['slot']}/submit", body), 201)
+
+
+def test_show_prior_must_be_reported_as_the_packet_gave_it(
     admin, project, ana, dr_smith, label_with, expect
 ):
     expect(admin.post(f"{project}/workflows", {"config": REVIEW_CHECKED}), 201)
@@ -309,8 +334,11 @@ def test_a_reviewer_may_report_less_than_the_packet_held(
     label_with(ana, flow, "cat")
     work = expect(dr_smith.post(f"{flow}/next"))
     shown = work["shown"] | {"prior_label_ids": [], "show_prior": False}
-    body = {"label": {"value": "dog"}, "shown": shown}
-    expect(dr_smith.post(f"{flow}/slots/{work['slot']['slot']}/submit", body), 201)
+    response = dr_smith.post(
+        f"{flow}/slots/{work['slot']['slot']}/submit", {"label": {"value": "dog"}, "shown": shown}
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"].endswith("Report exactly what the work packet gave.")
 
 
 def test_later_stages_are_offered_first(admin, project, ana, ben, label_with, expect):
@@ -326,18 +354,12 @@ def test_later_stages_are_offered_first(admin, project, ana, ben, label_with, ex
 
 
 def test_labelers_working_at_the_same_time_never_share_a_slot(
-    admin, project, new_person, label_with, expect
+    admin, project, new_person, one_stage, label_with, expect
 ):
     people = [new_person(name) for name in ("cy", "di", "ed", "flo")]
     for person in people:
         expect(admin.post(f"{project}/roles/annotator/grant", {"user": person.name, "reason": "x"}))
-    config = {
-        "workflow": "rush",
-        "dataset": "batch1",
-        "label_task": "standin@1",
-        "stages": [{"name": "annotate", "assign_to": "annotator"}],
-    }
-    expect(admin.post(f"{project}/workflows", {"config": config}), 201)
+    expect(admin.post(f"{project}/workflows", {"config": one_stage("rush")}), 201)
     flow = f"{project}/workflows/rush"
 
     def work_until_done(person):

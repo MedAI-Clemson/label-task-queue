@@ -5,6 +5,8 @@ from __future__ import annotations
 import csv
 import io
 
+import pytest
+
 
 def test_excluding_an_item(admin, ana, workflow, expect):
     claimed = expect(ana.post(f"{workflow}/next"))["slot"]  # img_001 is claimed
@@ -20,7 +22,7 @@ def test_excluding_an_item(admin, ana, workflow, expect):
 
 def test_an_exclusion_is_logged_with_its_reason(admin, workflow, project, expect):
     expect(admin.post(f"{workflow}/items/img_003/exclude", {"reason": "cannot be read"}))
-    (event,) = expect(admin.get(f"{project}/events?type=item_excluded"))["events"]
+    (event,) = expect(admin.get(f"{project}/events?type=item_excluded"))["rows"]
     assert (event["item"], event["actor"], event["reason"]) == ("img_003", "root", "cannot be read")
     assert event["because"] == "excluded by root: cannot be read"
 
@@ -32,14 +34,10 @@ def test_an_item_cannot_be_excluded_twice(admin, workflow, expect):
     assert response.json()["detail"] == "Item img_001 is already excluded from xray_main."
 
 
-def test_an_item_with_its_final_label_can_be_excluded(admin, project, ana, label_with, expect):
-    config = {
-        "workflow": "single",
-        "dataset": "batch1",
-        "label_task": "standin@1",
-        "stages": [{"name": "annotate", "assign_to": "annotator"}],
-    }
-    expect(admin.post(f"{project}/workflows", {"config": config}), 201)
+def test_an_item_with_its_final_label_can_be_excluded(
+    admin, project, ana, one_stage, label_with, expect
+):
+    expect(admin.post(f"{project}/workflows", {"config": one_stage("single")}), 201)
     flow = f"{project}/workflows/single"
     label_with(ana, flow, "cat")
     result = expect(admin.post(f"{flow}/items/img_001/exclude", {"reason": "wrong patient"}))
@@ -65,22 +63,11 @@ def test_excluding_an_unknown_item(admin, workflow):
     assert response.json()["detail"] == "Item 'nope' is not in workflow 'xray_main'."
 
 
-def test_excluding_needs_a_reason(admin, workflow):
-    assert admin.post(f"{workflow}/items/img_001/exclude", {}).status_code == 422
-    assert admin.post(f"{workflow}/items/img_001/exclude", {"reason": ""}).status_code == 422
-
-
-def test_an_item_id_may_contain_slashes(admin, ana, project, expect, make_items):
+def test_an_item_id_may_contain_slashes(admin, ana, project, one_stage, expect, make_items):
     expect(admin.post(f"{project}/datasets", {"name": "nested"}), 201)
     item = make_items(1)[0] | {"item": "patient_07/slice_3.png"}
     expect(admin.post(f"{project}/datasets/nested/items", {"items": [item]}), 201)
-    config = {
-        "workflow": "deep",
-        "dataset": "nested",
-        "label_task": "standin@1",
-        "stages": [{"name": "annotate", "assign_to": "annotator"}],
-    }
-    expect(admin.post(f"{project}/workflows", {"config": config}), 201)
+    expect(admin.post(f"{project}/workflows", {"config": one_stage("deep", "nested")}), 201)
     flow = f"{project}/workflows/deep"
     explained = expect(admin.get(f"{flow}/items/patient_07/slice_3.png/explain"))
     assert explained["explanation"]["item"] == "patient_07/slice_3.png"
@@ -116,13 +103,12 @@ def test_cancelling_an_unknown_stage(admin, workflow):
     )
 
 
-def test_cancelling_needs_a_reason(admin, workflow):
-    assert admin.post(f"{workflow}/stages/annotate/cancel-open-slots", {}).status_code == 422
+@pytest.mark.parametrize("path", ["items/img_001/exclude", "stages/annotate/cancel-open-slots"])
+@pytest.mark.parametrize("body", [{}, {"reason": ""}])
+def test_an_action_needs_a_reason(admin, workflow, path, body):
+    assert admin.post(f"{workflow}/{path}", body).status_code == 422
 
 
-def test_actions_on_an_unknown_workflow(admin, project):
-    assert (
-        admin.post(f"{project}/workflows/nope/items/a/exclude", {"reason": "x"}).status_code == 404
-    )
-    response = admin.post(f"{project}/workflows/nope/stages/a/cancel-open-slots", {"reason": "x"})
-    assert response.status_code == 404
+@pytest.mark.parametrize("path", ["items/a/exclude", "stages/a/cancel-open-slots"])
+def test_actions_on_an_unknown_workflow(admin, project, path):
+    assert admin.post(f"{project}/workflows/nope/{path}", {"reason": "x"}).status_code == 404

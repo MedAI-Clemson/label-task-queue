@@ -86,6 +86,21 @@ def _item_imported(tables: Tables, e: ev.ItemImported) -> None:
 # --- workflow ----------------------------------------------------------------------------
 
 
+def _add_version(tables: Tables, e: ev.WorkflowStarted | ev.ConfigActivated) -> None:
+    tables.insert(
+        "workflow_versions",
+        {
+            "workflow": e.workflow,
+            "version": e.config_version,
+            "config": e.config,
+            "config_hash": e.config_hash,
+            "activated_by": e.actor,
+            "activated_at": _time(e),
+            "seq": e.seq,
+        },
+    )
+
+
 def _workflow_started(tables: Tables, e: ev.WorkflowStarted) -> None:
     tables.insert(
         "workflows",
@@ -101,33 +116,11 @@ def _workflow_started(tables: Tables, e: ev.WorkflowStarted) -> None:
             "seq": e.seq,
         },
     )
-    tables.insert(
-        "workflow_versions",
-        {
-            "workflow": e.workflow,
-            "version": e.config_version,
-            "config": e.config,
-            "config_hash": e.config_hash,
-            "activated_by": e.actor,
-            "activated_at": _time(e),
-            "seq": e.seq,
-        },
-    )
+    _add_version(tables, e)
 
 
 def _config_activated(tables: Tables, e: ev.ConfigActivated) -> None:
-    tables.insert(
-        "workflow_versions",
-        {
-            "workflow": e.workflow,
-            "version": e.config_version,
-            "config": e.config,
-            "config_hash": e.config_hash,
-            "activated_by": e.actor,
-            "activated_at": _time(e),
-            "seq": e.seq,
-        },
-    )
+    _add_version(tables, e)
     tables.update("workflows", {"workflow": e.workflow}, {"active_version": e.config_version})
 
 
@@ -179,6 +172,7 @@ def _admission_decided(tables: Tables, e: ev.AdmissionDecided) -> None:
                 "status": "open",
                 "claimed_by": None,
                 "claimed_at": None,
+                "claimed_roles": None,
                 "label": None,
                 "config_version": e.config_version,
                 "admitted_seq": e.seq,
@@ -192,13 +186,20 @@ def _slot_claimed(tables: Tables, e: ev.SlotClaimed) -> None:
     tables.update(
         "slots",
         {"slot": e.slot},
-        {"status": "claimed", "claimed_by": e.user, "claimed_at": _time(e)},
+        {
+            "status": "claimed",
+            "claimed_by": e.user,
+            "claimed_at": _time(e),
+            "claimed_roles": list(e.roles),
+        },
     )
 
 
 def _slot_released(tables: Tables, e: ev.SlotReleased) -> None:
     tables.update(
-        "slots", {"slot": e.slot}, {"status": "open", "claimed_by": None, "claimed_at": None}
+        "slots",
+        {"slot": e.slot},
+        {"status": "open", "claimed_by": None, "claimed_at": None, "claimed_roles": None},
     )
     tables.insert(
         "releases",
@@ -227,6 +228,7 @@ def _label_submitted(tables: Tables, e: ev.LabelSubmitted) -> None:
             "slot": e.slot,
             "user": e.user,
             "roles": list(e.roles),
+            "roles_at_claim": slot["claimed_roles"] if slot else None,
             "config_version": e.config_version,
             "value": e.label,
             "shown_content_hash": e.shown.content_hash,
@@ -300,7 +302,13 @@ def _cancel(tables: Tables, slots: tuple[int, ...], seq: int) -> None:
         tables.update(
             "slots",
             {"slot": slot},
-            {"status": "cancelled", "claimed_by": None, "claimed_at": None, "closed_seq": seq},
+            {
+                "status": "cancelled",
+                "claimed_by": None,
+                "claimed_at": None,
+                "claimed_roles": None,
+                "closed_seq": seq,
+            },
         )
 
 

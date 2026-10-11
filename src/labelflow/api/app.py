@@ -14,6 +14,7 @@ from fastapi import FastAPI
 from fastapi.routing import APIRoute
 
 from labelflow.api.errors import add_error_handlers
+from labelflow.api.limits import BodyLimit
 from labelflow.api.routes import (
     accounts,
     actions,
@@ -29,6 +30,7 @@ from labelflow.api.runtime import Runtime
 from labelflow.api.settings import Settings
 from labelflow.engine import utc_now
 from labelflow.labeltask import LabelTaskRegistry
+from labelflow.ui import mount_ui
 
 DESCRIPTION = """\
 Run labeling workflows over images, with a record of every decision.
@@ -70,6 +72,8 @@ TAGS = [
     {"name": "health", "description": "Is the service running?"},
 ]
 
+ROUTERS = (auth, accounts, projects, roles, datasets, workflows, labeling, actions, feedback)
+
 
 def _operation_id(route: APIRoute) -> str:
     return route.name
@@ -102,6 +106,7 @@ def create_app(
         generate_unique_id_function=_operation_id,
     )
     app.state.runtime = runtime
+    app.add_middleware(BodyLimit, limit=runtime.settings.max_request_bytes)
     add_error_handlers(app)
 
     @app.get("/health", tags=["health"], summary="Is the service running?")
@@ -109,16 +114,7 @@ def create_app(
         """Report that the service is running. It needs no login."""
         return {"status": "ok"}
 
-    for module in (
-        auth,
-        accounts,
-        projects,
-        roles,
-        datasets,
-        workflows,
-        labeling,
-        actions,
-        feedback,
-    ):
+    for module in ROUTERS:
         app.include_router(module.router)
+    mount_ui(app)  # the server-rendered pages, under /ui
     return app

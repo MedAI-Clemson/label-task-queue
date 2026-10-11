@@ -1,0 +1,11 @@
+The config has 1 error. Fix it and check again.
+
+Errors:
+  1. stage 'expert_read', key 'labels_per_item'
+     Stages 'spot_check' and 'expert_read' can both hold the same item at the same time
+     (both take their items from 'annotate'), and both are assigned to the role 'expert'.
+     'expert_read' has `labels_per_item: all`, which reserves a slot for every holder of the
+     role 'expert', but nobody labels an item twice in a workflow, so anyone who labels the
+     item in 'spot_check' first can never fill their slot in 'expert_read', and the item
+     would stay in progress forever. Give the two stages different roles, or chain them so
+     that one takes the other's output (`input: spot_check` on 'expert_read').

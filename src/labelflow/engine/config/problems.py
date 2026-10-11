@@ -62,12 +62,18 @@ def suggestion(word: str, options: Iterable[str]) -> str:
     return f"Did you mean '{match}'?" if match else ""
 
 
-def and_list(items: Iterable[object]) -> str:
-    """Items in a sentence: ``a``, ``a and b``, ``a, b and c``."""
+def did_you_mean(word: str, options: Iterable[str]) -> str:
+    """``suggestion`` ready to append to a sentence: ``" Did you mean 'x'?"`` or ``""``."""
+    hint = suggestion(word, options)
+    return f" {hint}" if hint else ""
+
+
+def and_list(items: Iterable[object], conjunction: str = "and") -> str:
+    """Items in a sentence: ``a``, ``a and b``, ``a, b and c`` (or ``a, b or c``)."""
     words = [str(item) for item in items]
     if len(words) <= 1:
         return "".join(words)
-    return ", ".join(words[:-1]) + " and " + words[-1]
+    return f"{', '.join(words[:-1])} {conjunction} {words[-1]}"
 
 
 def quoted_list(names: Iterable[str]) -> str:

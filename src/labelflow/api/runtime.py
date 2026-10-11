@@ -87,6 +87,15 @@ class Runtime:
         """The labeling engine of one project."""
         return Engine(SqlStore(self.db, project), self.registry, clock=self.clock)
 
+    def roles_of(self, user: str) -> dict[str, list[str]]:
+        """The roles a person holds now, by project name (only projects they hold one in)."""
+        held = {}
+        for project in self.projects.list_all():
+            roles = self.engine_for(project.name).user_roles(user)
+            if roles:
+                held[project.name] = sorted(roles)
+        return held
+
 
 def make_database_folder(uri: str) -> None:
     url = sa.make_url(uri)

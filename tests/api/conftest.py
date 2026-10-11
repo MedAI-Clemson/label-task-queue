@@ -13,7 +13,8 @@ import hashlib
 import secrets
 import shutil
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass, field
+from contextlib import ExitStack
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, ClassVar
@@ -158,6 +159,27 @@ def client(app: FastAPI) -> Iterator[TestClient]:
 
 
 @pytest.fixture
+def app_with(
+    settings: Settings, label_tasks: LabelTaskRegistry, clock: Clock, password: str
+) -> Iterator[Callable[..., tuple[Caller, Caller]]]:
+    """``app_with(media_root=None)``: an app built with changed settings, on the same
+    database, with the admin ``root`` and the labeler ``ana`` logged in."""
+    with ExitStack() as stack:
+
+        def make(**changes: Any) -> tuple[Caller, Caller]:
+            app = create_app(replace(settings, **changes), label_tasks=label_tasks, clock=clock)
+            client = stack.enter_context(RecordingClient(app))
+            runtime = app.state.runtime
+            people = []
+            for name, is_admin in (("root", True), ("ana", False)):
+                runtime.accounts.create(name, password, name.title(), is_admin=is_admin)
+                people.append(Caller(client, name, runtime.identity.login(name, password).token))
+            return people[0], people[1]
+
+        yield make
+
+
+@pytest.fixture
 def anon(client: TestClient) -> Caller:
     """Somebody who is not logged in."""
     return Caller(client)
@@ -245,6 +267,22 @@ def make_items() -> Callable[..., list[dict[str, Any]]]:
         ]
 
     return make
+
+
+def single_stage(workflow: str, dataset: str = "batch1", **stage: Any) -> dict[str, Any]:
+    """A config with one stage, ``annotate``, for annotators (``stage`` changes its keys)."""
+    return {
+        "workflow": workflow,
+        "dataset": dataset,
+        "label_task": "standin@1",
+        "stages": [{"name": "annotate", "assign_to": "annotator"} | stage],
+    }
+
+
+@pytest.fixture
+def one_stage() -> Callable[..., dict[str, Any]]:
+    """``one_stage("name")``: see ``single_stage``."""
+    return single_stage
 
 
 @pytest.fixture

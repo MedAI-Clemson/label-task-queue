@@ -1,0 +1,11 @@
+The config has 1 error. Fix it and check again.
+
+Errors:
+  1. stage 'a', key 'labels_per_item'
+     Stages 'a' and 'b' can both hold the same item at the same time (both take every item
+     of the dataset), and both are assigned to the role 'expert'. Both have
+     `labels_per_item: all`, which reserves a slot in each stage for every holder of the
+     role 'expert', but nobody labels an item twice in a workflow, so each person can fill
+     only one of their two slots, and the item would stay in progress forever. Give the two
+     stages different roles, or chain them so that one takes the other's output (`input: a`
+     on 'b').

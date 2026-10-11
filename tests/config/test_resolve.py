@@ -80,9 +80,10 @@ def test_final_none_stays_none():
 def test_labels_per_item_forms():
     config = make(
         [
+            # three root stages, so each needs its own role (an `all` stage may not share one)
             {"name": "a", "assign_to": "x", "labels_per_item": "all"},
-            {"name": "b", "assign_to": "x", "labels_per_item": 3},
-            {"name": "c", "assign_to": "x", "labels_per_item": {"count": 2, "fraction": 0.25}},
+            {"name": "b", "assign_to": "y", "labels_per_item": 3},
+            {"name": "c", "assign_to": "z", "labels_per_item": {"count": 2, "fraction": 0.25}},
         ],
         final="none",
     )

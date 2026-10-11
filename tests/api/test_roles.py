@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-TWO_ANNOTATORS = """\
-workflow: needs_two
+import pytest
+
+NEEDS_THREE = """\
+workflow: needs_three
 dataset: batch1
 label_task: standin@1
 stages:
@@ -25,8 +27,12 @@ def test_roles_are_listed_with_their_holders(admin, project, expect):
 
 def test_defining_a_role(admin, project, expect):
     created = expect(admin.post(f"{project}/roles", {"role": "trainee"}), 201)
-    assert created["role"] == "trainee"
-    assert created["holders"] == []
+    assert created == {
+        "role": "trainee",
+        "defined_by": "root",
+        "defined_at": "2026-10-10T09:00:00Z",
+        "holders": [],
+    }
     assert [r["role"] for r in expect(admin.get(f"{project}/roles"))][-1] == "trainee"
 
 
@@ -47,7 +53,9 @@ def test_granting_a_role(admin, project, new_person, expect, password):
     result = expect(
         admin.post(f"{project}/roles/annotator/grant", {"user": "cy", "reason": "new hire"})
     )
-    assert result == {"role": "annotator", "holders": ["ana", "ben", "cy"], "warnings": []}
+    assert result["role"] == "annotator"
+    assert result["holders"] == ["ana", "ben", "cy"]
+    assert result["warnings"] == []
     cy_projects = expect(admin.post("/auth/login", {"username": "cy", "password": password}))
     assert cy_projects["user"]["user_id"] == "cy"
 
@@ -56,19 +64,18 @@ def test_a_grant_is_logged_with_its_reason(admin, project, new_person, expect):
     new_person("cy")
     admin.post(f"{project}/roles/annotator/grant", {"user": "cy", "reason": "passed the test"})
     events = expect(admin.get(f"{project}/events?type=role_granted"))
-    last = events["events"][-1]
+    last = events["rows"][-1]
     assert (last["user"], last["role"], last["actor"]) == ("cy", "annotator", "root")
     assert last["reason"] == "passed the test"
     assert last["because"] == "granted by root: passed the test"
 
 
-def test_granting_warns_when_a_running_workflow_is_short_of_people(admin, project, expect):
-    expect(admin.post(f"{project}/workflows", {"config": TWO_ANNOTATORS}), 201)
+def test_a_change_warns_when_a_running_workflow_is_short_of_people(admin, project, expect):
+    expect(admin.post(f"{project}/workflows", {"config": NEEDS_THREE}), 201)
     revoke = admin.post(f"{project}/roles/annotator/revoke", {"user": "ben", "reason": "left"})
-    warnings = expect(revoke)["warnings"]
-    assert len(warnings) == 1
-    assert "needs 3 different people" in warnings[0]
-    assert "needs_two" in warnings[0]
+    (warning,) = expect(revoke)["warnings"]
+    assert warning.startswith("workflow needs_three, ")
+    assert "needs 3 different people" in warning
 
 
 def test_a_grant_needs_an_existing_account(admin, project):
@@ -99,11 +106,12 @@ def test_granting_a_role_twice_is_a_conflict(admin, project):
     assert response.json()["detail"] == "ana already holds role 'annotator'."
 
 
-def test_a_grant_needs_a_reason(admin, project):
-    response = admin.post(f"{project}/roles/expert/grant", {"user": "ana"})
+@pytest.mark.parametrize("action", ["grant", "revoke"])
+def test_a_role_change_needs_a_reason(admin, project, action):
+    response = admin.post(f"{project}/roles/expert/{action}", {"user": "ana"})
     assert response.status_code == 422
     assert "reason: Field required" in response.json()["problems"]
-    blank = admin.post(f"{project}/roles/expert/grant", {"user": "ana", "reason": ""})
+    blank = admin.post(f"{project}/roles/expert/{action}", {"user": "ana", "reason": ""})
     assert blank.status_code == 422
 
 
@@ -111,7 +119,7 @@ def test_revoking_a_role(admin, ana, project, expect):
     result = expect(
         admin.post(f"{project}/roles/annotator/revoke", {"user": "ana", "reason": "moved on"})
     )
-    assert result == {"role": "annotator", "holders": ["ben"], "warnings": []}
+    assert (result["role"], result["holders"], result["warnings"]) == ("annotator", ["ben"], [])
     assert expect(ana.get("/projects")) == []
 
 

@@ -23,6 +23,14 @@ final: [expert_review, annotate]
 """
 )
 
+TRAINEES_ONLY = {
+    "workflow": "training",
+    "dataset": "batch1",
+    "label_task": "standin@1",
+    "stages": [{"name": "gold", "assign_to": "trainee", "labels_per_item": "all"}],
+    "final": "none",
+}
+
 
 def edited(**changes):
     """The review config with the review stage's settings changed."""
@@ -124,7 +132,7 @@ def test_the_seed_fixes_the_draws(admin, ana, project, label_with, expect):
     expect(admin.post(f"{project}/workflows", {"config": REVIEW, "seed": 7}), 201)
     for _ in range(5):
         label_with(ana, f"{project}/workflows/xray_main")
-    admitted = expect(admin.get(f"{project}/events?type=admission_decided&limit=500"))["events"]
+    admitted = expect(admin.get(f"{project}/events?type=admission_decided&limit=500"))["rows"]
     reviews = [e for e in admitted if e["stage"] == "expert_review"]
     assert len(reviews) == 5
     for event in reviews:
@@ -185,9 +193,11 @@ def test_an_admin_lists_every_workflow(admin, workflow, project, expect):
     assert first["status"] == "running"
     assert first["active_version"] == 1
     assert first["started_by"] == "root"
+    assert first["seed"] == 11
+    assert first["paused"] is None
     assert first["stages"] == [
-        {"name": "annotate", "assign_to": ["annotator"]},
-        {"name": "expert_review", "assign_to": ["expert"]},
+        {"name": "annotate", "roles": ["annotator"], "paused": None},
+        {"name": "expert_review", "roles": ["expert"], "paused": None},
     ]
 
 
@@ -195,23 +205,17 @@ def test_a_labeler_lists_the_workflows_where_they_hold_a_role(
     admin, ana, dr_smith, project, expect
 ):
     expect(admin.post(f"{project}/roles", {"role": "trainee"}), 201)
-    only_trainees = REVIEW | {"workflow": "training"}
-    only_trainees["stages"] = [{"name": "gold", "assign_to": "trainee", "labels_per_item": "all"}]
-    only_trainees["final"] = "none"
     expect(admin.post(f"{project}/workflows", {"config": REVIEW}), 201)
-    expect(admin.post(f"{project}/workflows", {"config": only_trainees}), 201)
+    expect(admin.post(f"{project}/workflows", {"config": TRAINEES_ONLY}), 201)
     assert [w["workflow"] for w in expect(ana.get(f"{project}/workflows"))] == ["xray_main"]
     assert [w["workflow"] for w in expect(dr_smith.get(f"{project}/workflows"))] == ["xray_main"]
+    assert expect(ana.get(f"{project}/workflows"))[0]["seed"] is None
     grant = {"user": "ana", "reason": "training"}
     expect(admin.post(f"{project}/roles/trainee/grant", grant))
     assert [w["workflow"] for w in expect(ana.get(f"{project}/workflows"))] == [
         "xray_main",
         "training",
     ]
-
-
-def test_a_stranger_sees_no_workflows(admin, new_person, workflow, project, expect):
-    assert expect(new_person("stranger").get(f"{project}/workflows")) == []
 
 
 def test_showing_a_workflow(admin, workflow, expect):
@@ -259,12 +263,21 @@ def test_a_labeler_sees_a_workflow_they_hold_a_role_in_but_not_its_seed(
     }
 
 
-def test_a_labeler_without_a_role_in_the_workflow_may_not_see_it(
-    admin, new_person, workflow, expect
-):
-    response = new_person("stranger").get(workflow)
+def test_a_labeler_without_a_role_in_the_workflow_may_not_see_it(admin, ana, project, expect):
+    expect(admin.post(f"{project}/roles", {"role": "trainee"}), 201)
+    expect(admin.post(f"{project}/workflows", {"config": TRAINEES_ONLY}), 201)
+    response = ana.get(f"{project}/workflows/training")  # ana is an annotator, not a trainee
     assert response.status_code == 403
     assert response.json()["detail"] == "You do not hold a role in this workflow."
+
+
+def test_a_stranger_to_the_project_finds_neither_it_nor_its_workflows(
+    new_person, workflow, project
+):
+    stranger = new_person("stranger")
+    for response in (stranger.get(f"{project}/workflows"), stranger.get(workflow)):
+        assert response.status_code == 404
+        assert response.json()["detail"] == "There is no project named 'xray'."
 
 
 def test_an_unknown_workflow_is_not_found(admin, ana, project):
@@ -324,11 +337,6 @@ def test_previewing_a_config_that_is_not_valid(admin, workflow, expect):
     assert result["preview"]["errors"]
 
 
-def test_previewing_an_edit_of_an_unknown_workflow(admin, project):
-    response = admin.post(f"{project}/workflows/nope/preview-edit", {"config": REVIEW})
-    assert response.status_code == 404
-
-
 def test_making_an_edit(admin, workflow, project, expect):
     body = {"config": edited(sample=0.3), "base_version": 1, "reason": "we need more reviews"}
     result = expect(admin.post(f"{workflow}/edits", body), 201)
@@ -376,17 +384,20 @@ def test_an_edit_that_changes_nothing_is_refused(admin, workflow):
     assert "nothing to activate" in response.json()["detail"]
 
 
-def test_an_edit_needs_a_base_version(admin, workflow):
-    assert admin.post(f"{workflow}/edits", {"config": edited(sample=0.3)}).status_code == 422
-    assert (
-        admin.post(
-            f"{workflow}/edits", {"config": edited(sample=0.3), "base_version": 0}
-        ).status_code
-        == 422
-    )
+@pytest.mark.parametrize("body", [{}, {"base_version": 0}])
+def test_an_edit_needs_a_base_version(admin, workflow, body):
+    response = admin.post(f"{workflow}/edits", {"config": edited(sample=0.3)} | body)
+    assert response.status_code == 422
 
 
-def test_editing_an_unknown_workflow(admin, project):
-    body = {"config": REVIEW, "base_version": 1}
-    assert admin.post(f"{project}/workflows/nope/edits", body).status_code == 404
-    assert admin.get(f"{project}/workflows/nope/versions").status_code == 404
+@pytest.mark.parametrize(
+    "request_for",
+    [
+        lambda a, p: a.get(f"{p}/workflows/nope/versions"),
+        lambda a, p: a.post(f"{p}/workflows/nope/preview-edit", {"config": REVIEW}),
+        lambda a, p: a.post(f"{p}/workflows/nope/edits", {"config": REVIEW, "base_version": 1}),
+    ],
+    ids=["versions", "preview", "edit"],
+)
+def test_versions_and_edits_of_an_unknown_workflow(admin, project, request_for):
+    assert request_for(admin, project).status_code == 404

@@ -38,12 +38,7 @@ class ProjectOut(BaseModel):
 def create_project(body: ProjectIn, admin: AdminUser, runtime: RuntimeDep) -> ProjectOut:
     """Create an empty project. Its roles, datasets and workflows are added afterwards."""
     project = runtime.projects.create(body.name, admin.user_id)
-    return ProjectOut(
-        name=project.name,
-        created_by=project.created_by,
-        created_at=project.created_at,
-        your_roles=runtime.projects.roles_of(admin.user_id).get(project.name, []),
-    )
+    return ProjectOut(**vars(project), your_roles=[])
 
 
 @router.get(
@@ -56,14 +51,9 @@ def create_project(body: ProjectIn, admin: AdminUser, runtime: RuntimeDep) -> Pr
 def list_projects(user: User, runtime: RuntimeDep) -> list[ProjectOut]:
     """List the projects you can see: every project if you are an administrator, otherwise the
     projects where you hold a role."""
-    held = runtime.projects.roles_of(user.user_id)
+    held = runtime.roles_of(user.user_id)
     return [
-        ProjectOut(
-            name=project.name,
-            created_by=project.created_by,
-            created_at=project.created_at,
-            your_roles=held.get(project.name, []),
-        )
+        ProjectOut(**vars(project), your_roles=held.get(project.name, []))
         for project in runtime.projects.list_all()
         if user.is_admin or project.name in held
     ]

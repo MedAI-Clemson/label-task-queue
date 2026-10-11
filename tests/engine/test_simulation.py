@@ -1,19 +1,25 @@
 """Simulated labelers run the design note's example workflows to completion.
 
-Each simulated labeler keeps asking for work and submitting; its label is the item's true
-value with a set probability, chosen with a seeded random generator.
+Each simulated labeler keeps asking for work and submitting; its label is a correct one
+with a set probability, chosen with a seeded random generator. The label factory decides
+what "correct" and "wrong" look like, so the same simulation runs the stand-in task and the
+real ontology task.
 """
 
 import json
 import random
 from collections import Counter, defaultdict
+from pathlib import Path
 
+import numpy as np
 import pytest
 
 from labelflow.engine import draw, rebuild, verify_chain
-from labelflow.engine.simulate import SimulatedLabeler, simulate
+from labelflow.engine.simulate import SimulatedLabeler, simulate, standin_labels
+from labelflow.labeltask import load_ontology, rle
 
 VALUES = ("normal", "effusion", "nodule")
+ONTOLOGY = Path(__file__).resolve().parents[2] / "examples" / "ontologies" / "chest_xray.yaml"
 
 
 def truth(item: str) -> str:
@@ -48,7 +54,8 @@ def test_annotators_label_and_an_expert_reviews_a_20_percent_sample(build, cfg):
     engine = build(config, items=150, grants=grants, seed=2026)
     labelers = [SimulatedLabeler(u, 0.8) for u in ("ana", "ben", "cy")]
     labelers.append(SimulatedLabeler("dr_smith", 0.95))
-    simulate(engine, "wf", labelers, truth, VALUES, random.Random(11))
+    rng = random.Random(11)
+    simulate(engine, "wf", labelers, standin_labels(truth, VALUES, rng), rng)
 
     items = engine.export_items("wf")
     assert len(items) == 150 and {r["status"] for r in items} == {"final"}
@@ -86,7 +93,8 @@ def test_two_annotators_and_adjudication_of_disagreements(build, cfg):
     engine = build(config, items=80, grants=grants, seed=7)
     labelers = [SimulatedLabeler(u, 0.75) for u in ("ana", "ben", "cy")]
     labelers += [SimulatedLabeler(u, 0.9) for u in ("dr_smith", "dr_jones")]
-    simulate(engine, "wf", labelers, truth, VALUES, random.Random(5))
+    rng = random.Random(5)
+    simulate(engine, "wf", labelers, standin_labels(truth, VALUES, rng), rng)
 
     items = {r["item"]: r for r in engine.export_items("wf")}
     assert {r["status"] for r in items.values()} == {"final"}
@@ -134,7 +142,8 @@ def test_training_round_scores_every_trainee_against_the_gold_key(build, cfg):
         properties=lambda i: {"gold_key": {"value": truth(f"img_{i:03d}")}},
     )
     labelers = [SimulatedLabeler(user, p) for user, p in accuracy.items()]
-    submitted = simulate(engine, "wf", labelers, truth, VALUES, random.Random(3))
+    rng = random.Random(3)
+    submitted = simulate(engine, "wf", labelers, standin_labels(truth, VALUES, rng), rng)
     assert submitted == 20 * 4
 
     assert {r["status"] for r in engine.export_items("wf")} == {"none"}
@@ -154,4 +163,52 @@ def test_training_round_scores_every_trainee_against_the_gold_key(build, cfg):
         assert row["agreed"] == correct
     report = {r["labeler"]: r["fraction_agreed"] for r in engine.score_report("wf")}
     assert report["t1"] == 1.0 and report["t4"] < 0.5
+    check_log(engine)
+
+
+def xray_label(item: str, correct: bool) -> dict:
+    """A label for the chest X-ray ontology: odd images are PA with an effusion, even ones
+    AP without; a wrong label gets the view wrong."""
+    number = int(item.split("_")[1])
+    view = "PA" if number % 2 else "AP"
+    if not correct:
+        view = "AP" if view == "PA" else "PA"
+    lung = np.zeros((16, 16), dtype=bool)
+    lung[2:14, 3:13] = True
+    effusion = np.zeros((16, 16), dtype=bool)
+    if number % 2:
+        effusion[10:14, 8:13] = True
+    return {
+        "classifications": {"view": view, "quality": "good"},
+        "masks": {"lung": rle.encode(lung), "effusion": rle.encode(effusion)},
+    }
+
+
+def test_the_simulation_runs_the_ontology_task_too(build, cfg):
+    """Any label task works: the factory supplies the labels, the engine never looks inside."""
+    ontology = load_ontology(ONTOLOGY)
+    config = cfg(
+        {"name": "annotate", "assign_to": "annotator", "labels_per_item": 2},
+        {"name": "adjudicate", "input": "annotate.disagreed", "assign_to": "expert"},
+        final=["adjudicate", "annotate"],
+    ) | {"label_task": ontology.ref}
+    engine = build(config, items=24, task=ontology, seed=3)
+    labelers = [SimulatedLabeler("ana", 0.7), SimulatedLabeler("ben", 0.7)]
+    labelers.append(SimulatedLabeler("dr_smith", 1.0))
+    simulate(engine, "wf", labelers, xray_label, random.Random(9))
+
+    items = {r["item"]: r for r in engine.export_items("wf")}
+    assert len(items) == 24 and {r["status"] for r in items.values()} == {"final"}
+    labels = engine.export_labels("wf")
+    assert {r["ontology_version"] for r in labels} == {ontology.ontology_version}
+    adjudicated = {r["item"] for r in labels if r["stage"] == "adjudicate"}
+    disagreed = {
+        item
+        for item, rows in labels_by_item(engine, "wf").items()
+        if len({json.loads(r["label"])["classifications"]["view"] for r in rows[:2]}) == 2
+    }
+    assert adjudicated == disagreed and 3 < len(disagreed) < 21
+    for item in adjudicated:  # the expert is always right; agreed annotators may not be
+        view = json.loads(items[item]["final_label"])["classifications"]["view"]
+        assert view == xray_label(item, correct=True)["classifications"]["view"]
     check_log(engine)

@@ -1,4 +1,4 @@
-"""Every engine error becomes the right HTTP status, with the engine's own words as detail."""
+"""Every error becomes the right HTTP status in the one shape, with the engine's own words."""
 
 from __future__ import annotations
 
@@ -7,7 +7,14 @@ import inspect
 import pytest
 from fastapi.testclient import TestClient
 
-from labelflow.api.errors import ApiError, Forbidden, NotLoggedIn, Unprocessable, status_for
+from labelflow.api.errors import (
+    ApiError,
+    Forbidden,
+    NotLoggedIn,
+    TooLarge,
+    Unprocessable,
+    status_for,
+)
 from labelflow.engine import errors as engine_errors
 from labelflow.labeltask import UnknownLabelTask
 
@@ -24,6 +31,7 @@ EXPECTED = {
     "VersionConflict": 409,
     "NotAllowed": 409,
     "Paused": 409,
+    "OntologyChanged": 409,
     "NotEligible": 403,
     "SlotNotYours": 403,
     "EditRefused": 422,
@@ -31,6 +39,7 @@ EXPECTED = {
     "InvalidLabel": 422,
     "InvalidShown": 422,
     "BrokenChain": 500,
+    "LabelTaskFailed": 422,
     "EngineError": 422,
 }
 
@@ -91,17 +100,25 @@ def test_a_refused_edit_and_a_rejected_label_list_every_problem(raising):
         assert "second problem" in body["detail"]
 
 
-def test_api_errors_keep_their_status_and_problems(raising):
-    assert raising(Forbidden("No.")).status_code == 403
-    unprocessable = raising(Unprocessable("Bad.", ["one", "two"]))
-    assert (unprocessable.status_code, unprocessable.json()) == (
-        422,
-        {"detail": "Bad.", "problems": ["one", "two"]},
-    )
+@pytest.mark.parametrize(
+    ("error", "status"),
+    [
+        (Forbidden("No."), 403),
+        (TooLarge("Too big."), 413),
+        (Unprocessable("Bad.", ["one", "two"]), 422),
+        (ApiError("Plain."), 400),
+    ],
+)
+def test_api_errors_keep_their_status_and_problems(raising, error, status):
+    response = raising(error)
+    assert response.status_code == status
+    assert response.json() == {"detail": error.detail, "problems": error.problems}
+
+
+def test_not_logged_in_asks_for_a_bearer_token(raising):
     login = raising(NotLoggedIn("Log in."))
     assert login.status_code == 401
     assert login.headers["www-authenticate"] == "Bearer"
-    assert ApiError("x").status == 400
 
 
 def test_a_label_task_the_server_lacks_is_a_server_problem(raising):
@@ -141,10 +158,11 @@ def test_a_request_that_is_not_json(admin):
     assert response.json()["detail"].startswith("The request is not valid")
 
 
-def test_an_unknown_address(client):
-    response = client.get("/nothing/here")
-    assert response.status_code == 404
-    assert "detail" in response.json()
+def test_the_frameworks_own_refusals_have_the_same_shape(client):
+    assert client.get("/nothing/here").status_code == 404
+    assert client.get("/nothing/here").json() == {"detail": "Not Found", "problems": []}
+    assert client.delete("/health").status_code == 405
+    assert client.delete("/health").json() == {"detail": "Method Not Allowed", "problems": []}
 
 
 # The mappings, met through the real endpoints.
@@ -165,3 +183,15 @@ def test_the_mappings_through_the_endpoints(admin, workflow, status, make_reques
     response = make_request(admin, workflow)
     assert response.status_code == status, response.text
     assert response.json()["detail"]
+
+
+def test_did_you_mean_hints_are_for_administrators_only(admin, ana, workflow, project):
+    """A hint names things in the project, which a labeler must not learn from a typo."""
+    for_admin = admin.get(f"{project}/workflows/xray_mian").json()["detail"]
+    assert for_admin == "There is no workflow named 'xray_mian'. Did you mean 'xray_main'?"
+    for_labeler = ana.get(f"{project}/workflows/xray_mian")
+    assert for_labeler.status_code == 404
+    assert for_labeler.json()["detail"] == "There is no workflow named 'xray_mian'."
+    assert ana.post(f"{project}/workflows/xray_mian/next").json()["detail"] == (
+        "There is no workflow named 'xray_mian'."
+    )

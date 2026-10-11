@@ -7,7 +7,7 @@ from datetime import datetime
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
-from labelflow.api.accounts import MAX_PASSWORD_LENGTH, Account
+from labelflow.api.accounts import MAX_PASSWORD_LENGTH
 from labelflow.api.deps import AdminUser, RuntimeDep
 from labelflow.api.errors import errors
 from labelflow.engine import NotAllowed
@@ -17,6 +17,8 @@ router = APIRouter(
     tags=["admin: accounts"],
     responses=errors(401, 403, 422),
 )
+
+DEACTIVATED = "account deactivated"
 
 
 class AccountIn(BaseModel):
@@ -48,9 +50,15 @@ class AccountOut(BaseModel):
     )
     created_at: datetime = Field(description="When the account was created (UTC).")
 
-    @classmethod
-    def of(cls, account: Account) -> AccountOut:
-        return cls(**vars(account))
+
+class DeactivatedOut(AccountOut):
+    revoked_roles: dict[str, list[str]] = Field(
+        description="The roles taken away from the account, by project."
+    )
+    warnings: list[str] = Field(
+        description="Stages of running workflows whose roles now have too few people to fill "
+        "them. Empty when every stage is still staffed."
+    )
 
 
 class PasswordIn(BaseModel):
@@ -65,27 +73,36 @@ def create_account(body: AccountIn, admin: AdminUser, runtime: RuntimeDep) -> Ac
     account = runtime.accounts.create(
         body.username, body.password, body.display_name, body.is_admin, created_by=admin.user_id
     )
-    return AccountOut.of(account)
+    return AccountOut(**vars(account))
 
 
 @router.get("", response_model=list[AccountOut], summary="List accounts")
 def list_accounts(admin: AdminUser, runtime: RuntimeDep) -> list[AccountOut]:
     """List every account, including deactivated ones."""
-    return [AccountOut.of(account) for account in runtime.accounts.list_all()]
+    return [AccountOut(**vars(account)) for account in runtime.accounts.list_all()]
 
 
 @router.post(
     "/{username}/deactivate",
-    response_model=AccountOut,
+    response_model=DeactivatedOut,
     summary="Deactivate an account",
     responses=errors(404, 409),
 )
-def deactivate_account(username: str, admin: AdminUser, runtime: RuntimeDep) -> AccountOut:
-    """Stop an account from logging in, and end its current logins. What the person did stays
-    in the record. You cannot deactivate your own account."""
+def deactivate_account(username: str, admin: AdminUser, runtime: RuntimeDep) -> DeactivatedOut:
+    """Stop an account from logging in, end its current logins, and take away every role it
+    holds, in every project, so it no longer counts as someone who can label. What the
+    person did stays in the record. You cannot deactivate your own account."""
     if username == admin.user_id:
         raise NotAllowed("You cannot deactivate your own account. Ask another administrator.")
-    return AccountOut.of(runtime.accounts.deactivate(username))
+    account = runtime.accounts.deactivate(username)
+    revoked = runtime.roles_of(username)
+    warnings: list[str] = []
+    for project, roles in revoked.items():
+        engine = runtime.engine_for(project)
+        for role in roles:  # each call reports the project's staffing after that revocation
+            latest = engine.revoke_role(username, role, admin.user_id, DEACTIVATED)
+        warnings += [f"project {project}, {warning}" for warning in latest]
+    return DeactivatedOut(**vars(account), revoked_roles=revoked, warnings=warnings)
 
 
 @router.post(

@@ -9,8 +9,9 @@ from __future__ import annotations
 from fastapi import APIRouter, Response
 from pydantic import BaseModel, Field, JsonValue
 
-from labelflow.api.deps import UserProject
+from labelflow.api.deps import RuntimeDep, UserProject
 from labelflow.api.errors import errors
+from labelflow.api.limits import check_size
 from labelflow.engine import Shown, Slot, WorkPacket
 
 router = APIRouter(
@@ -27,8 +28,8 @@ class Work(BaseModel):
         "blind, the item's earlier labels with the agree/disagree flags."
     )
     shown: Shown = Field(
-        description="The references to send back with the label if you showed everything in "
-        "the packet. Change them if you showed less."
+        description="The references to send back with the label. Leave out the ids of earlier "
+        "labels you did not show; `show_prior` stays as given."
     )
 
 
@@ -110,12 +111,15 @@ def get_work(workflow: str, slot: int, ctx: UserProject) -> Work:
     status_code=201,
     response_model=SubmitOut,
     summary="Submit a label",
-    responses=errors(403),
+    responses=errors(403, 413),
 )
-def submit_label(workflow: str, slot: int, body: SubmitIn, ctx: UserProject) -> SubmitOut:
+def submit_label(
+    workflow: str, slot: int, body: SubmitIn, ctx: UserProject, runtime: RuntimeDep
+) -> SubmitOut:
     """Submit the label for a slot you hold, with the references to what you showed. A label
-    that does not fit the label task is rejected with every problem; nothing is recorded and
-    you still hold the slot."""
+    that does not fit the label task is rejected with every problem; so is a `shown` that
+    does not match the work packet. Nothing is recorded then, and you still hold the slot."""
+    check_size(body.label, runtime.settings.max_label_bytes, "The label")
     label_id = ctx.engine.submit(
         workflow, slot, ctx.actor, body.label, body.shown, body.duration_ms
     )

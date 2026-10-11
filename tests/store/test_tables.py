@@ -1,4 +1,8 @@
-"""The table interface over SQLite behaves exactly like the in-memory tables."""
+"""The table interface: the in-memory tables and the SQLite tables behave the same.
+
+The shared tests run on both stores. The rest check what only one of them can get wrong:
+SQLite's column types and ordering, and the in-memory undo journal.
+"""
 
 from __future__ import annotations
 
@@ -11,8 +15,214 @@ import sqlalchemy as sa
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from labelflow.engine import SCHEMA, InMemoryTables, IntegrityError, Table
+from labelflow.engine import SCHEMA, InMemoryStore, InMemoryTables, IntegrityError, Table
 from labelflow.store import SqlStore, create_schema
+
+
+def slot_row(slot: int, **changes) -> dict:
+    row = {
+        "slot": slot,
+        "workflow": "wf",
+        "stage": "annotate",
+        "item": "a",
+        "index": 1,
+        "reserved_for": None,
+        "status": "open",
+        "claimed_by": None,
+        "claimed_at": None,
+        "claimed_roles": None,
+        "label": None,
+        "config_version": 1,
+        "admitted_seq": 1,
+        "closed_seq": None,
+    }
+    return row | changes
+
+
+def label_row(label: int, slot: int, user: str) -> dict:
+    return {
+        "label": label,
+        "workflow": "wf",
+        "stage": "annotate",
+        "item": "a",
+        "slot": slot,
+        "user": user,
+        "roles": ["annotator"],
+        "roles_at_claim": ["annotator"],
+        "config_version": 1,
+        "value": {"value": "cat"},
+        "shown_content_hash": "h",
+        "shown_prior_ids": [],
+        "show_prior": True,
+        "shown_consensus_rule": None,
+        "label_task": "standin@1",
+        "ontology_version": "o@1",
+        "duration_ms": None,
+        "claimed_at": None,
+        "submitted_at": "2026-10-10T09:00:00+00:00",
+        "seq": label,
+    }
+
+
+@pytest.fixture(params=["memory", "sqlite"])
+def tables(request, store):
+    """A store of either kind, empty, with the default schema."""
+    return InMemoryStore() if request.param == "memory" else store
+
+
+# --- shared behaviour -----------------------------------------------------------------------
+
+
+def test_insert_get_update_select(tables):
+    with tables.transaction():
+        tables.insert("slots", slot_row(2))
+        tables.insert("slots", slot_row(1, item="b"))
+        assert tables.get("slots", slot=1)["item"] == "b"
+        assert tables.get("slots", slot=3) is None
+        tables.update("slots", {"slot": 1}, {"status": "claimed", "claimed_by": "ana"})
+    assert [r["slot"] for r in tables.select("slots")] == [1, 2]  # primary-key order
+    assert [r["slot"] for r in tables.select("slots", status="open")] == [2]
+    assert [r["slot"] for r in tables.select("slots", status="claimed", claimed_by="ana")] == [1]
+    assert tables.select("slots", status="claimed", claimed_by="ben") == []
+    assert [r["slot"] for r in tables.select("slots", claimed_by=None)] == [2]
+
+
+def test_returned_rows_are_copies(tables):
+    detail = {"values": ["a"]}
+    consensus = {
+        "workflow": "wf",
+        "stage": "s",
+        "item": "i",
+        "label_ids": [1, 2],
+        "agreed": True,
+        "agreed_label": {"value": "a"},
+        "rule_version": "r",
+        "detail": detail,
+        "config_version": 1,
+        "at": "2026-10-10T09:00:00+00:00",
+        "seq": 1,
+    }
+    with tables.transaction():
+        tables.insert("counters", {"name": "slot", "value": 1})
+        tables.insert("consensus", consensus)
+    detail["values"].append("b")
+    tables.get("counters", name="slot")["value"] = 99
+    tables.get("consensus", workflow="wf", stage="s", item="i")["detail"]["values"].append("c")
+    assert tables.get("counters", name="slot")["value"] == 1
+    assert tables.get("consensus", workflow="wf", stage="s", item="i")["detail"] == {
+        "values": ["a"]
+    }
+
+
+def test_an_int_in_a_float_column_comes_back_as_a_float(tables):
+    row = {
+        "workflow": "wf",
+        "stage": "s",
+        "item": "i",
+        "source": "dataset",
+        "admitted": True,
+        "draw": None,
+        "threshold": 1,
+        "labels_draw": None,
+        "n_slots": 1,
+        "config_version": 1,
+        "at": "2026-10-10T09:00:00+00:00",
+        "seq": 1,
+        "completed": False,
+        "outputs": [],
+        "completed_seq": None,
+    }
+    with tables.transaction():
+        tables.insert("admissions", row)
+    assert type(tables.get("admissions", workflow="wf", stage="s", item="i")["threshold"]) is float
+
+
+@pytest.mark.parametrize(
+    ("action", "message"),
+    [
+        (lambda t: t.insert("slots", slot_row(1)), "already has a row|UNIQUE constraint failed"),
+        (lambda t: t.insert("slots", {"slot": 5}), "missing"),
+        (lambda t: t.insert("slots", slot_row(5) | {"index": "one"}), "int"),
+        (lambda t: t.insert("slots", slot_row(5) | {"status": None}), "None"),
+        (lambda t: t.insert("slots", slot_row(5) | {"surprise": 1}), "unknown"),
+        (lambda t: t.update("slots", {"slot": 9}, {"status": "open"}), "no row"),
+        (lambda t: t.update("slots", {"slot": 9}, {}), "no row"),
+        (lambda t: t.update("slots", {"slot": 1}, {"slot": 2}), "cannot be updated"),
+        (lambda t: t.update("slots", {"slot": 1}, {"nope": 2}), "cannot be updated"),
+        (lambda t: t.update("slots", {"item": "a"}, {"status": "open"}), "key"),
+        (lambda t: t.get("slots", item="a"), "key"),
+        (lambda t: t.select("consensus", detail={}), "filter"),
+        (lambda t: t.select("slots", nope=1), "filter"),
+        (lambda t: t.select("nope"), "no table"),
+        (lambda t: t.get("nope", x=1), "no table"),
+    ],
+)
+def test_misuse_raises_an_integrity_error(tables, action, message):
+    with tables.transaction():
+        tables.insert("slots", slot_row(1))
+        with pytest.raises(IntegrityError, match=message):
+            action(tables)
+
+
+def test_unique_constraints_back_up_the_rules(tables):
+    with tables.transaction():
+        tables.insert("labels", label_row(1, slot=1, user="ana"))
+        with pytest.raises(IntegrityError, match=r"ana|UNIQUE"):
+            tables.insert("labels", label_row(2, slot=2, user="ana"))
+        with pytest.raises(IntegrityError, match=r"slot|UNIQUE"):
+            tables.insert("labels", label_row(2, slot=1, user="ben"))
+        tables.insert("labels", label_row(2, slot=2, user="ben"))
+        with pytest.raises(IntegrityError, match=r"already has a row|UNIQUE"):
+            tables.update("labels", {"label": 2}, {"user": "ana"})
+        tables.update("labels", {"label": 2}, {"stage": "review"})
+    assert [r["stage"] for r in tables.select("labels")] == ["annotate", "review"]
+
+
+def test_a_refused_write_does_not_end_the_transaction(tables):
+    with tables.transaction():
+        tables.insert("slots", slot_row(1))
+        with pytest.raises(IntegrityError):
+            tables.insert("slots", slot_row(1))
+        tables.insert("slots", slot_row(2))
+    assert [r["slot"] for r in tables.select("slots")] == [1, 2]
+
+
+def test_writes_need_a_transaction(tables):
+    with pytest.raises(RuntimeError, match=r"insert\(\)"):
+        tables.insert("slots", slot_row(1))
+    with pytest.raises(RuntimeError, match=r"update\(\)"):
+        tables.update("slots", {"slot": 1}, {"status": "open"})
+    assert tables.select("slots") == []
+
+
+def test_every_schema_table_exists_and_starts_empty(tables):
+    assert tables.snapshot() == {table.name: [] for table in SCHEMA}
+
+
+def test_every_table_has_its_key_among_its_columns():
+    for table in SCHEMA:
+        assert set(table.key) <= set(table.columns)
+        for spec in table.columns.values():
+            assert spec.rstrip("?") in {"int", "float", "str", "bool", "time", "json"}
+
+
+# --- the in-memory undo journal -------------------------------------------------------------
+
+
+def test_rollback_undoes_inserts_and_updates():
+    memory = InMemoryTables()
+    memory.insert("slots", slot_row(1))
+    before = memory.snapshot()
+    memory.begin()
+    memory.insert("slots", slot_row(2))
+    memory.update("slots", {"slot": 1}, {"status": "claimed", "claimed_by": "ana"})
+    memory.rollback()
+    assert memory.snapshot() == before
+    assert memory.select("slots", status="claimed") == []
+    assert [r["slot"] for r in memory.select("slots", status="open")] == [1]
+
+
+# --- SQLite column types and ordering -------------------------------------------------------
 
 # One column of every type, each with and without None.
 THINGS = Table(
@@ -97,12 +307,6 @@ def test_every_column_type_comes_back_as_it_went_in(things):
     assert things.get("things", id=2)["data"] is None
 
 
-def test_an_int_in_a_float_column_is_stored_as_a_float(things):
-    with things.transaction():
-        things.insert("things", thing(1, ratio=1))
-    assert type(things.get("things", id=1)["ratio"]) is float
-
-
 _ids = itertools.count(1)
 json_values = st.recursive(
     st.none()
@@ -163,81 +367,6 @@ def test_string_keys_sort_like_python(store):
             memory.insert("roles", row)
     assert store.select("roles") == memory.select("roles")
     assert [r["role"] for r in store.select("roles")] == sorted(names)
-
-
-def slot_row(slot: int, **changes) -> dict:
-    row = {
-        "slot": slot,
-        "workflow": "wf",
-        "stage": "annotate",
-        "item": "a",
-        "index": 1,
-        "reserved_for": None,
-        "status": "open",
-        "claimed_by": None,
-        "claimed_at": None,
-        "label": None,
-        "config_version": 1,
-        "admitted_seq": 1,
-        "closed_seq": None,
-    }
-    return row | changes
-
-
-@pytest.mark.parametrize(
-    ("action", "message"),
-    [
-        (lambda t: t.insert("slots", slot_row(1)), "UNIQUE constraint failed"),
-        (lambda t: t.insert("slots", {"slot": 5}), "missing"),
-        (lambda t: t.insert("slots", slot_row(5) | {"index": "one"}), "int"),
-        (lambda t: t.insert("slots", slot_row(5) | {"status": None}), "None"),
-        (lambda t: t.insert("slots", slot_row(5) | {"surprise": 1}), "unknown"),
-        (lambda t: t.update("slots", {"slot": 9}, {"status": "open"}), "no row"),
-        (lambda t: t.update("slots", {"slot": 9}, {}), "no row"),
-        (lambda t: t.update("slots", {"slot": 1}, {"slot": 2}), "cannot be updated"),
-        (lambda t: t.update("slots", {"slot": 1}, {"nope": 2}), "cannot be updated"),
-        (lambda t: t.update("slots", {"item": "a"}, {"status": "open"}), "key"),
-        (lambda t: t.get("slots", item="a"), "key"),
-        (lambda t: t.select("consensus", detail={}), "filter"),
-        (lambda t: t.select("slots", nope=1), "filter"),
-        (lambda t: t.select("nope"), "no table"),
-        (lambda t: t.get("nope", x=1), "no table"),
-    ],
-)
-def test_misuse_raises_the_same_kind_of_error_as_the_memory_tables(store, action, message):
-    with store.transaction():
-        store.insert("slots", slot_row(1))
-        with pytest.raises(IntegrityError, match=message):
-            action(store)
-
-
-def test_a_refused_write_does_not_end_the_transaction(store):
-    with store.transaction():
-        store.insert("slots", slot_row(1))
-        with pytest.raises(IntegrityError):
-            store.insert("slots", slot_row(1))
-        store.insert("slots", slot_row(2))
-    assert [r["slot"] for r in store.select("slots")] == [1, 2]
-
-
-def test_writes_need_a_transaction(store):
-    with pytest.raises(RuntimeError, match=r"insert\(\) must be called inside"):
-        store.insert("slots", slot_row(1))
-    with pytest.raises(RuntimeError, match=r"update\(\) must be called inside"):
-        store.update("slots", {"slot": 1}, {"status": "open"})
-    assert store.select("slots") == []
-
-
-def test_returned_rows_are_copies(store):
-    with store.transaction():
-        store.insert("counters", {"name": "slot", "value": 1})
-    row = store.get("counters", name="slot")
-    row["value"] = 99
-    assert store.get("counters", name="slot")["value"] == 1
-
-
-def test_every_schema_table_exists_and_starts_empty(store):
-    assert store.snapshot() == {table.name: [] for table in SCHEMA}
 
 
 def test_nan_is_refused_rather_than_stored(things):

@@ -22,7 +22,14 @@ from labelflow.engine.config.models import (
     Stage,
     WorkflowConfig,
 )
-from labelflow.engine.config.problems import Problem
+from labelflow.engine.config.problems import (
+    Problem,
+    and_list,
+    did_you_mean,
+    percent,
+    plural,
+    quoted_list,
+)
 from labelflow.engine.config.resolve import resolve, resolved_yaml
 from labelflow.engine.config.validate import (
     ConfigReport,
@@ -41,8 +48,13 @@ __all__ = [
     "Stage",
     "ValidationContext",
     "WorkflowConfig",
+    "and_list",
     "config_json_schema",
     "config_json_schema_text",
+    "did_you_mean",
+    "percent",
+    "plural",
+    "quoted_list",
     "resolve",
     "resolved_yaml",
     "role_warnings",

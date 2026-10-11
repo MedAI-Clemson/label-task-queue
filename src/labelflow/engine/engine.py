@@ -665,6 +665,15 @@ class Engine:
         with self.store.reading():
             return held_roles(self.store, user)
 
+    def holds_a_claim(self, user: str) -> bool:
+        """Whether the person holds a claim in any workflow of the project.
+
+        A claim outlives a role change: whoever held the role when they claimed may still
+        submit or release it.
+        """
+        with self.store.reading():
+            return bool(self.store.select("slots", status="claimed", claimed_by=user))
+
     def datasets(self) -> list[Dataset]:
         """Every dataset, in the order created, with its number of items."""
         with self.store.reading():

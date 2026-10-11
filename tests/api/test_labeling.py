@@ -112,6 +112,19 @@ def test_submitting_a_label(ana, workflow, expect):
     assert nxt["slot"]["item"] == "img_002"
 
 
+def test_a_held_claim_can_be_finished_after_losing_every_role(
+    admin, ana, workflow, project, expect
+):
+    """A claim outlives a role change (decided), even when it was the person's last role."""
+    work = expect(ana.post(f"{workflow}/next"))
+    slot = work["slot"]["slot"]
+    expect(admin.post(f"{project}/roles/annotator/revoke", {"user": "ana", "reason": "moved on"}))
+    body = {"label": {"value": "cat"}, "shown": work["shown"], "duration_ms": 1000}
+    assert expect(ana.post(f"{workflow}/slots/{slot}/submit", body), 201) == {"label_id": 1}
+    # with no role and no claim left, the project is out of reach again
+    assert ana.post(f"{workflow}/next").status_code == 404
+
+
 def test_a_submitted_label_is_recorded_with_what_was_shown(admin, ana, workflow, project, expect):
     work = expect(ana.post(f"{workflow}/next"))
     body = {"label": {"value": "cat"}, "shown": work["shown"], "duration_ms": 4200}
@@ -301,7 +314,19 @@ def test_a_reviewer_sees_the_earlier_label(admin, project, ana, dr_smith, label_
     expect(dr_smith.post(f"{flow}/slots/{work['slot']['slot']}/submit", body), 201)
 
 
-def test_a_reviewer_may_report_less_than_the_packet_held(
+def test_a_reviewer_may_report_fewer_prior_labels_than_the_packet_held(
+    admin, project, ana, dr_smith, label_with, expect
+):
+    expect(admin.post(f"{project}/workflows", {"config": REVIEW_CHECKED}), 201)
+    flow = f"{project}/workflows/checked"
+    label_with(ana, flow, "cat")
+    work = expect(dr_smith.post(f"{flow}/next"))
+    shown = work["shown"] | {"prior_label_ids": []}
+    body = {"label": {"value": "dog"}, "shown": shown}
+    expect(dr_smith.post(f"{flow}/slots/{work['slot']['slot']}/submit", body), 201)
+
+
+def test_show_prior_must_be_reported_as_the_packet_gave_it(
     admin, project, ana, dr_smith, label_with, expect
 ):
     expect(admin.post(f"{project}/workflows", {"config": REVIEW_CHECKED}), 201)
@@ -309,8 +334,11 @@ def test_a_reviewer_may_report_less_than_the_packet_held(
     label_with(ana, flow, "cat")
     work = expect(dr_smith.post(f"{flow}/next"))
     shown = work["shown"] | {"prior_label_ids": [], "show_prior": False}
-    body = {"label": {"value": "dog"}, "shown": shown}
-    expect(dr_smith.post(f"{flow}/slots/{work['slot']['slot']}/submit", body), 201)
+    response = dr_smith.post(
+        f"{flow}/slots/{work['slot']['slot']}/submit", {"label": {"value": "dog"}, "shown": shown}
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"].endswith("Report exactly what the work packet gave.")
 
 
 def test_later_stages_are_offered_first(admin, project, ana, ben, label_with, expect):

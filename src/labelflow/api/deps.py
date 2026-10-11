@@ -90,10 +90,11 @@ def project_for_user(
     user: Annotated[Principal, Depends(current_user)],
     runtime: Annotated[Runtime, Depends(get_runtime)],
 ) -> ProjectContext:
-    """The project, for someone who administers it or holds a role in it."""
+    """The project, for someone who administers it, holds a role in it, or still holds a
+    claim there (a claim outlives a role change, so its holder may finish it)."""
     runtime.projects.require(project)
     engine = runtime.engine_for(project)
-    if not user.is_admin and not engine.user_roles(user.user_id):
+    if not (user.is_admin or engine.user_roles(user.user_id) or engine.holds_a_claim(user.user_id)):
         raise unknown_project(project)
     return ProjectContext(project, engine, user)
 

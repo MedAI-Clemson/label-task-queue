@@ -160,7 +160,11 @@ label tasks from `examples/ontologies/`. The interactive API docs are at
 | --- | --- | --- |
 | `DATABASE_URI` | `sqlite:///./db/labelflow.db` | The SQLite database. |
 | `LABELFLOW_LABEL_TASKS` | `./ontologies` (`run.sh`: `examples/ontologies`) | Folder of ontology files. |
-| `LABELFLOW_MEDIA_ROOT` | not set | Folder the server may read images from, to hash them at import. |
+| `LABELFLOW_MEDIA_ROOT` | not set | Folder the server may read images from, to hash them at import. Without it, every imported item must come with its `content_hash`. |
+| `LABELFLOW_MAX_REQUEST_MB` | `20` | Largest request body accepted. |
+| `LABELFLOW_MAX_LABEL_KB` | `4096` | Largest submitted label. |
+| `LABELFLOW_MAX_PROPERTIES_KB` | `256` | Largest `properties` of one imported item. |
+| `LABELFLOW_MAX_IMPORT_ITEMS` | `10000` | Most items in one import batch. |
 | `LABELFLOW_SESSION_HOURS` | `12` | How long a login lasts. |
 | `LABELFLOW_COOKIE_SECURE` | `false` | Set to `true` when the service is served over https. |
 | `LABELFLOW_ADMIN_PASSWORD` | not set | Lets `create-admin` run without a prompt. |

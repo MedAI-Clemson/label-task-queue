@@ -197,11 +197,8 @@ def test_the_simulation_runs_the_ontology_task_too(build, cfg):
     labelers.append(SimulatedLabeler("dr_smith", 1.0))
     simulate(engine, "wf", labelers, xray_label, random.Random(9))
 
-    items = engine.export_items("wf")
-    assert len(items) == 24 and {r["status"] for r in items} == {"final"}
-    for row in items:
-        label = json.loads(row["final_label"])
-        assert label["classifications"]["view"] == ("PA" if int(row["item"][4:]) % 2 else "AP")
+    items = {r["item"]: r for r in engine.export_items("wf")}
+    assert len(items) == 24 and {r["status"] for r in items.values()} == {"final"}
     labels = engine.export_labels("wf")
     assert {r["ontology_version"] for r in labels} == {ontology.ontology_version}
     adjudicated = {r["item"] for r in labels if r["stage"] == "adjudicate"}
@@ -211,4 +208,7 @@ def test_the_simulation_runs_the_ontology_task_too(build, cfg):
         if len({json.loads(r["label"])["classifications"]["view"] for r in rows[:2]}) == 2
     }
     assert adjudicated == disagreed and 3 < len(disagreed) < 21
+    for item in adjudicated:  # the expert is always right; agreed annotators may not be
+        view = json.loads(items[item]["final_label"])["classifications"]["view"]
+        assert view == xray_label(item, correct=True)["classifications"]["view"]
     check_log(engine)

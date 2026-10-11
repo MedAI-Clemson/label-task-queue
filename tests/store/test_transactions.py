@@ -1,4 +1,9 @@
-"""Transactions: atomic commands, nesting, the write lock taken first, WAL readers."""
+"""Transactions: atomic commands, nesting, the write lock taken first, read snapshots, WAL.
+
+What holds on both stores (a failed or refused command leaves no trace, append needs a
+transaction, the read context refuses writes) is checked by the engine tests; here is what
+only SQLite can get wrong.
+"""
 
 from __future__ import annotations
 
@@ -7,9 +12,7 @@ import threading
 import pytest
 import sqlalchemy as sa
 
-from labelflow.engine import AlreadyExists
 from labelflow.engine import events as ev
-from labelflow.labeltask.standin import StandInLabelTask
 from labelflow.store import SqlStore, connect
 
 
@@ -21,22 +24,11 @@ def counter(store: SqlStore, name: str = "slot", value: int = 1) -> None:
     store.insert("counters", {"name": name, "value": value})
 
 
-def test_a_failed_command_leaves_no_events_and_no_table_changes(build_engine, store):
-    class Broken(StandInLabelTask):
-        def check_consensus(self, labels):
-            raise RuntimeError("label task crashed")
+def names(store: SqlStore) -> set[str]:
+    return {r["name"] for r in store.select("counters")}
 
-    engine = build_engine(store, task=Broken())
-    first = engine.request_work("wf", "ana")
-    second = engine.request_work("wf", "ben")
-    packet = engine.work_packet("wf", first.slot, "ana")
-    engine.submit("wf", first.slot, "ana", {"value": "a"}, packet.shown())
-    packet = engine.work_packet("wf", second.slot, "ben")
-    events, state = store.events(), store.snapshot()
-    with pytest.raises(RuntimeError, match="crashed"):
-        engine.submit("wf", second.slot, "ben", {"value": "a"}, packet.shown())
-    assert store.events() == events
-    assert store.snapshot() == state
+
+# --- write transactions ---------------------------------------------------------------------
 
 
 def test_an_exception_rolls_back_events_and_rows_together(store):
@@ -52,28 +44,20 @@ def test_an_exception_rolls_back_events_and_rows_together(store):
     assert store.snapshot() == state
 
 
-def test_a_refused_command_leaves_the_log_alone(build_engine, store):
-    engine = build_engine(store)
-    events = store.events()
-    with pytest.raises(AlreadyExists):
-        engine.create_dataset("ds", "admin")
-    assert store.events() == events
-
-
 def test_transactions_nest_and_only_the_outermost_decides(store):
     with store.transaction():
         counter(store, "outer")
         with store.transaction():
             counter(store, "inner")
         assert store.get("counters", name="inner") is not None  # not committed yet
-    assert {r["name"] for r in store.select("counters")} == {"outer", "inner"}
+    assert names(store) == {"outer", "inner"}
 
     with pytest.raises(KeyError), store.transaction():
         counter(store, "a")
         with store.transaction():
             counter(store, "b")
         raise KeyError("outer fails after the inner one succeeded")
-    assert {r["name"] for r in store.select("counters")} == {"outer", "inner"}
+    assert names(store) == {"outer", "inner"}
 
 
 def test_a_transaction_after_a_failure_works(store):
@@ -82,18 +66,6 @@ def test_a_transaction_after_a_failure_works(store):
     with store.transaction():
         counter(store)
     assert store.get("counters", name="slot") == {"name": "slot", "value": 1}
-
-
-def test_append_needs_a_transaction(store):
-    with pytest.raises(RuntimeError, match="transaction"):
-        store.append(a_dataset_event("x"))
-
-
-def test_a_logged_event_cannot_be_appended_again(store):
-    with store.transaction():
-        logged = store.append(a_dataset_event("x"))
-        with pytest.raises(ValueError, match="new event"):
-            store.append(logged)
 
 
 def test_other_connections_see_a_command_only_after_it_commits(engine, open_engine, store):
@@ -140,7 +112,7 @@ def test_a_second_writer_waits_for_the_first_to_finish(engine, open_engine, stor
         counter(store, "first")
     thread.join(timeout=10)
     assert order == ["first", "second"]
-    assert {r["name"] for r in store.select("counters")} == {"first", "second"}
+    assert names(store) == {"first", "second"}
 
 
 def test_each_thread_has_its_own_transaction(store):
@@ -153,6 +125,72 @@ def test_each_thread_has_its_own_transaction(store):
         worker.join()
         assert len(store.select("counters")) == 1
     assert seen == [[]]
+
+
+# --- read snapshots -------------------------------------------------------------------------
+
+
+def test_a_read_sees_one_snapshot_whatever_is_committed_meanwhile(engine, open_engine, store):
+    writer = SqlStore(open_engine(), "demo")
+    with writer.transaction():
+        counter(writer, "before")
+    with store.reading():
+        assert names(store) == {"before"}
+        with writer.transaction():
+            counter(writer, "during")
+            writer.append(a_dataset_event("during"))
+        assert writer.get("counters", name="during") is not None  # committed...
+        assert names(store) == {"before"}  # ...but the read keeps its snapshot
+        assert store.events() == [] and store.count_events() == 0
+    assert names(store) == {"before", "during"}  # a new read sees it
+    assert len(store.events()) == 1
+
+
+def test_a_read_does_not_wait_for_a_writer_nor_hold_one_up(engine, open_engine, store):
+    """WAL mode: the writer's uncommitted rows are invisible, and the read holds no lock."""
+    writer = SqlStore(open_engine(busy_timeout=0.2), "demo")
+    with writer.transaction():
+        counter(writer, "pending")
+        with store.reading():  # starts at once, although the write lock is held
+            assert store.select("counters") == []
+            assert store.count_events() == 0
+    with store.reading():
+        assert names(store) == {"pending"}
+        with writer.transaction():  # the writer is not turned away by the open read
+            counter(writer, "later")
+        assert names(store) == {"pending"}
+    assert names(store) == {"pending", "later"}
+
+
+def test_a_read_takes_no_write_lock(engine, open_engine, store):
+    other = SqlStore(open_engine(busy_timeout=0.2), "demo")
+    with store.reading(), other.transaction():
+        counter(other)  # two readers, or a reader and a writer, never wait for each other
+    with store.reading():
+        store.select("counters")
+        with other.reading():
+            other.select("counters")
+
+
+def test_a_read_nested_in_a_transaction_sees_its_uncommitted_rows(store):
+    with store.transaction():
+        counter(store, "mine")
+        with store.reading():
+            assert names(store) == {"mine"}
+        counter(store, "after")  # still a write transaction once the nested read is over
+    assert names(store) == {"mine", "after"}
+
+
+def test_reads_leave_no_transaction_behind(store):
+    with pytest.raises(KeyError), store.reading():
+        store.select("counters")
+        raise KeyError("boom")
+    with store.transaction():
+        counter(store)
+    assert names(store) == {"slot"}
+
+
+# --- the connection settings ----------------------------------------------------------------
 
 
 def test_the_database_uses_wal_and_waits_for_locks(engine):

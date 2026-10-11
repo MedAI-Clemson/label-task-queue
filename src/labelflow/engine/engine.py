@@ -158,13 +158,13 @@ class Engine:
         actor: str | None = None,
     ) -> None:
         """Add one item to a dataset (see ``import_items``)."""
-        for value, what in ((item_id, "item id"), (uri, "uri"), (content_hash, "content hash")):
-            _check_text(value, what)
         try:
-            props = _JSON_DICT.validate_python(dict(properties or {}))
-        except ValidationError as error:
-            raise InvalidRequest(f"Item properties must be JSON values: {error}") from None
-        new = NewItem(item=item_id, uri=uri, content_hash=content_hash, properties=props)
+            props = dict(properties or {})
+            new = NewItem(item=item_id, uri=uri, content_hash=content_hash, properties=props)
+        except (TypeError, ValidationError) as error:
+            raise InvalidRequest(
+                f"The item needs text fields and JSON properties: {error}"
+            ) from None
         self.import_items(dataset, [new], actor)
 
     def import_items(self, dataset: str, items: Iterable[NewItem], actor: str | None) -> list[str]:

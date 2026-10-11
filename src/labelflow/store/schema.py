@@ -16,6 +16,7 @@ of this schema; ``tests/store/test_migrations.py`` fails when the two drift apar
 from __future__ import annotations
 
 import json
+from functools import cache
 from typing import Any
 
 import sqlalchemy as sa
@@ -97,24 +98,19 @@ TRIGGERS = EVENT_TRIGGERS | SLOT_TRIGGERS
 """Every trigger by name; the migration holds the same text."""
 
 
-def _types(table: Table) -> dict[str, sa.types.TypeEngine]:
-    return {column: _COLUMN_TYPES[table.column_type(column)[0]]() for column in table.columns}
-
-
 def _add_table(metadata: sa.MetaData, table: Table) -> sa.Table:
     if PROJECT in table.columns or table.name == EVENTS:
         raise ValueError(f"The table {table.name!r} clashes with the store's own names.")
-    types = _types(table)
     columns = [sa.Column(PROJECT, sa.Text(), nullable=False)]
     for column in table.columns:
-        nullable = table.column_type(column)[1]
-        columns.append(sa.Column(column, types[column], nullable=nullable))
+        kind, nullable = table.column_type(column)
+        columns.append(sa.Column(column, _COLUMN_TYPES[kind](), nullable=nullable))
     constraints: list[sa.schema.SchemaItem] = [
         sa.PrimaryKeyConstraint(PROJECT, *table.key, name=f"pk_{table.name}")
     ]
-    for columns_ in table.unique:
-        name = f"uq_{table.name}_{'_'.join(columns_)}"
-        constraints.append(sa.UniqueConstraint(PROJECT, *columns_, name=name))
+    for unique in table.unique:
+        name = f"uq_{table.name}_{'_'.join(unique)}"
+        constraints.append(sa.UniqueConstraint(PROJECT, *unique, name=name))
     return sa.Table(table.name, metadata, *columns, *constraints)
 
 
@@ -164,9 +160,6 @@ def _attach_triggers(table: sa.Table, triggers: dict[str, str]) -> None:
         event.listen(table, "after_create", DDL(sql))
 
 
-_METADATA: dict[tuple, sa.MetaData] = {}
-
-
 def build_metadata(schema: tuple[Table, ...] = SCHEMA) -> sa.MetaData:
     """The SQLAlchemy tables for a schema, with their constraints, indexes and triggers,
     plus the deployment tables (accounts, sessions, projects; see ``deployment``).
@@ -174,18 +167,21 @@ def build_metadata(schema: tuple[Table, ...] = SCHEMA) -> sa.MetaData:
     The result is cached and shared (SQLAlchemy compiles each statement once per table
     object), so treat it as read-only.
     """
-    signature = tuple((t.name, t.key, tuple(t.columns.items()), t.unique) for t in schema)
-    if signature not in _METADATA:
-        metadata = sa.MetaData()
-        for table in schema:
-            _add_table(metadata, table)
-        _attach_triggers(_add_events(metadata), EVENT_TRIGGERS)
-        if "slots" in metadata.tables:
-            _add_slot_rules(metadata.tables["slots"])
-            _attach_triggers(metadata.tables["slots"], SLOT_TRIGGERS)
-        add_deployment_tables(metadata)
-        _METADATA[signature] = metadata
-    return _METADATA[signature]
+    # Table.columns is a dict, so the cache key spells the schema out.
+    return _build(tuple((t.name, t.key, tuple(t.columns.items()), t.unique) for t in schema))
+
+
+@cache
+def _build(signature: tuple) -> sa.MetaData:
+    metadata = sa.MetaData()
+    for name, key, columns, unique in signature:
+        _add_table(metadata, Table(name, key, dict(columns), unique))
+    _attach_triggers(_add_events(metadata), EVENT_TRIGGERS)
+    if "slots" in metadata.tables:
+        _add_slot_rules(metadata.tables["slots"])
+        _attach_triggers(metadata.tables["slots"], SLOT_TRIGGERS)
+    add_deployment_tables(metadata)
+    return metadata
 
 
 def create_schema(engine: sa.Engine, schema: tuple[Table, ...] = SCHEMA) -> None:

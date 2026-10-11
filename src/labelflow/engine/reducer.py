@@ -86,6 +86,21 @@ def _item_imported(tables: Tables, e: ev.ItemImported) -> None:
 # --- workflow ----------------------------------------------------------------------------
 
 
+def _add_version(tables: Tables, e: ev.WorkflowStarted | ev.ConfigActivated) -> None:
+    tables.insert(
+        "workflow_versions",
+        {
+            "workflow": e.workflow,
+            "version": e.config_version,
+            "config": e.config,
+            "config_hash": e.config_hash,
+            "activated_by": e.actor,
+            "activated_at": _time(e),
+            "seq": e.seq,
+        },
+    )
+
+
 def _workflow_started(tables: Tables, e: ev.WorkflowStarted) -> None:
     tables.insert(
         "workflows",
@@ -101,33 +116,11 @@ def _workflow_started(tables: Tables, e: ev.WorkflowStarted) -> None:
             "seq": e.seq,
         },
     )
-    tables.insert(
-        "workflow_versions",
-        {
-            "workflow": e.workflow,
-            "version": e.config_version,
-            "config": e.config,
-            "config_hash": e.config_hash,
-            "activated_by": e.actor,
-            "activated_at": _time(e),
-            "seq": e.seq,
-        },
-    )
+    _add_version(tables, e)
 
 
 def _config_activated(tables: Tables, e: ev.ConfigActivated) -> None:
-    tables.insert(
-        "workflow_versions",
-        {
-            "workflow": e.workflow,
-            "version": e.config_version,
-            "config": e.config,
-            "config_hash": e.config_hash,
-            "activated_by": e.actor,
-            "activated_at": _time(e),
-            "seq": e.seq,
-        },
-    )
+    _add_version(tables, e)
     tables.update("workflows", {"workflow": e.workflow}, {"active_version": e.config_version})
 
 

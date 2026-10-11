@@ -10,6 +10,7 @@ cannot import from a conftest.
 from __future__ import annotations
 
 import hashlib
+import secrets
 import shutil
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
@@ -30,7 +31,6 @@ from labelflow.labeltask import LabelTaskRegistry
 from labelflow.labeltask.standin import StandInLabelTask
 
 ROOT = Path(__file__).resolve().parents[2]
-PASSWORD = "correct horse battery"
 
 # What the end-to-end tests run: annotators label every image, an expert reviews 20%.
 REVIEW_SAMPLE = """\
@@ -163,12 +163,30 @@ def anon(client: TestClient) -> Caller:
     return Caller(client)
 
 
+def make_password() -> str:
+    """A password made at run time; it starts with letters, so ``swapcase`` always changes it."""
+    return "pw" + secrets.token_urlsafe(16)
+
+
 @pytest.fixture
-def new_person(app: FastAPI, client: TestClient) -> Callable[..., Caller]:
+def password() -> str:
+    """The password of the accounts ``new_person`` makes; a new one for every test."""
+    return make_password()
+
+
+@pytest.fixture
+def new_password() -> Callable[[], str]:
+    """``new_password()``: another password, different from ``password`` and from each other."""
+    return make_password
+
+
+@pytest.fixture
+def new_person(app: FastAPI, client: TestClient, password: str) -> Callable[..., Caller]:
     """Make an account straight in the database and log in, without going through the API."""
     runtime = app.state.runtime
+    default_password = password
 
-    def make(name: str, admin: bool = False, password: str = PASSWORD) -> Caller:
+    def make(name: str, admin: bool = False, password: str = default_password) -> Caller:
         runtime.accounts.create(name, password, name.title(), is_admin=admin, created_by="setup")
         return Caller(client, name, runtime.identity.login(name, password).token)
 

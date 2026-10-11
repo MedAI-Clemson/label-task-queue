@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import csv
+import io
+
 
 def test_excluding_an_item(admin, ana, workflow, expect):
     claimed = expect(ana.post(f"{workflow}/next"))["slot"]  # img_001 is claimed
@@ -29,20 +32,31 @@ def test_an_item_cannot_be_excluded_twice(admin, workflow, expect):
     assert response.json()["detail"] == "Item img_001 is already excluded from xray_main."
 
 
-def test_an_item_with_its_final_label_cannot_be_excluded(admin, workflow, ana, label_with, expect):
+def test_an_item_with_its_final_label_can_be_excluded(admin, project, ana, label_with, expect):
     config = {
         "workflow": "single",
         "dataset": "batch1",
         "label_task": "standin@1",
         "stages": [{"name": "annotate", "assign_to": "annotator"}],
     }
-    project = workflow.rsplit("/workflows/", 1)[0]
     expect(admin.post(f"{project}/workflows", {"config": config}), 201)
     flow = f"{project}/workflows/single"
-    label_with(ana, flow)
-    response = admin.post(f"{flow}/items/img_001/exclude", {"reason": "too late"})
-    assert response.status_code == 409
-    assert "already has its final label" in response.json()["detail"]
+    label_with(ana, flow, "cat")
+    result = expect(admin.post(f"{flow}/items/img_001/exclude", {"reason": "wrong patient"}))
+    assert result == {"item": "img_001", "cancelled_slots": []}
+    progress = expect(admin.get(flow))["progress"]["items"]
+    assert (progress["final"], progress["excluded"]) == (0, 1)
+    exported = admin.get(f"{flow}/exports/items?format=csv")
+    row = next(csv.DictReader(io.StringIO(exported.text)))
+    assert (row["item"], row["status"], row["final_status"]) == ("img_001", "excluded", "final")
+    assert row["final_label"] == '{"value":"cat"}'
+    explained = expect(admin.get(f"{flow}/items/img_001/explain"))["explanation"]
+    assert explained["status"] == "excluded"
+    assert explained["final"]["label"] == {"value": "cat"}
+    assert [t["type"] for t in explained["trace"]][-2:] == ["item_finalized", "item_excluded"]
+    again = admin.post(f"{flow}/items/img_001/exclude", {"reason": "again"})
+    assert again.status_code == 409
+    assert again.json()["detail"] == "Item img_001 is already excluded from single."
 
 
 def test_excluding_an_unknown_item(admin, workflow):

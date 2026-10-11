@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import difflib
 from collections.abc import Iterable
+from datetime import datetime
 
 from labelflow.engine.config import Stage, WorkflowConfig
 from labelflow.engine.errors import UnknownItem, UnknownStage, UnknownWorkflow
@@ -130,8 +131,39 @@ def next_id(tables: Tables, name: str) -> int:
     return 1 if row is None else row["value"] + 1
 
 
+def active_pause(tables: Tables, workflow: str, stage: str | None = None) -> Row | None:
+    """The pause in force on the workflow (no ``stage``) or on one stage, else None."""
+    if stage is None:
+        row = tables.get("workflow_pauses", workflow=workflow)
+    else:
+        row = tables.get("stage_pauses", workflow=workflow, stage=stage)
+    return row if row is not None and row["paused"] else None
+
+
+def blocking_pauses(tables: Tables, workflow: str, stage: str) -> list[str]:
+    """Why nothing in the stage can be claimed now, one phrase per pause in force (the
+    workflow's first); empty when claims are open."""
+    reasons = []
+    for row, what in (
+        (active_pause(tables, workflow), f"workflow {workflow}"),
+        (active_pause(tables, workflow, stage), f"stage {stage}"),
+    ):
+        if row is not None:
+            reasons.append(f"{what} is paused ({pause_text(row)})")
+    return reasons
+
+
+def pause_text(row: Row) -> str:
+    """``by root since 2026-10-10 09:00 UTC: scanner recalibration``."""
+    since = datetime.fromisoformat(row["at"]).strftime("%Y-%m-%d %H:%M UTC")
+    return f"by {row['by']} since {since}: {row['reason']}"
+
+
 def export_status(tables: Tables, workflow: str, item: str) -> str:
-    """in_progress, excluded, or the final-label status: final, unresolved or none."""
+    """in_progress, excluded, or the final-label status: final, unresolved or none.
+
+    An item excluded after it was finalized is ``excluded``: the exclusion is the later word.
+    """
     status = workflow_item(tables, workflow, item)["status"]
     if status != "done":
         return status

@@ -26,6 +26,7 @@ from labelflow.engine.errors import (
     NotAllowed,
     NotEligible,
     NotFound,
+    Paused,
     SlotNotYours,
     UnknownDataset,
     UnknownItem,
@@ -49,7 +50,14 @@ from labelflow.engine.explain import Explanation
 from labelflow.engine.reducer import apply_event
 from labelflow.engine.store import InMemoryStore, Store, rebuild
 from labelflow.engine.tables import SCHEMA, InMemoryTables, IntegrityError, Table, Tables
-from labelflow.engine.views import ConsensusShown, PriorLabel, Slot, WorkPacket
+from labelflow.engine.views import (
+    ConsensusShown,
+    Pause,
+    PauseState,
+    PriorLabel,
+    Slot,
+    WorkPacket,
+)
 
 __all__ = [
     "SCHEMA",
@@ -74,6 +82,9 @@ __all__ = [
     "NotAllowed",
     "NotEligible",
     "NotFound",
+    "Pause",
+    "PauseState",
+    "Paused",
     "PriorLabel",
     "Shown",
     "Slot",

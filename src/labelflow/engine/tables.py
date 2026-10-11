@@ -109,7 +109,9 @@ SCHEMA: tuple[Table, ...] = (
         },
     ),
     # One row per item of the dataset that entered the workflow.
-    # status: in_progress, done (it has its final-label record) or excluded.
+    # status: in_progress, done (it has its final-label record) or excluded (it may have a
+    # final-label record too, kept as history, when it was excluded after finalization).
+    # closed_seq: when the item stopped moving (finalized, or excluded while in progress).
     Table(
         "workflow_items",
         key=("workflow", "item"),
@@ -253,6 +255,34 @@ SCHEMA: tuple[Table, ...] = (
             "rule": "str",
             "config_version": "int",
             "at": "time",
+            "seq": "int",
+        },
+    ),
+    # Pause state, one row per workflow or stage that was ever paused. A pause stops claims
+    # only. paused is the current state; by, at, reason and seq describe the latest pause or
+    # resume. The two are independent: resuming a workflow leaves its paused stages paused.
+    Table(
+        "workflow_pauses",
+        key=("workflow",),
+        columns={
+            "workflow": "str",
+            "paused": "bool",
+            "by": "str?",
+            "at": "time",
+            "reason": "str",
+            "seq": "int",
+        },
+    ),
+    Table(
+        "stage_pauses",
+        key=("workflow", "stage"),
+        columns={
+            "workflow": "str",
+            "stage": "str",
+            "paused": "bool",
+            "by": "str?",
+            "at": "time",
+            "reason": "str",
             "seq": "int",
         },
     ),

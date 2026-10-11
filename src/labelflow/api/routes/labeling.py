@@ -69,8 +69,9 @@ def _work(ctx: UserProject, workflow: str, slot: int) -> Work:
 )
 def next_work(workflow: str, ctx: UserProject) -> Work | Response:
     """Get the slot you are working on, or, if you hold none, claim the next one you are
-    allowed to take (slots of later stages first, then the oldest item). Answers 204 when
-    there is nothing for you."""
+    allowed to take (slots of later stages first, then the oldest item; items you gave back
+    come last). Answers 204 when there is nothing for you, including when everything you
+    could do is paused."""
     slot = ctx.engine.request_work(workflow, ctx.actor)
     if slot is None:
         return Response(status_code=204)
@@ -85,8 +86,9 @@ def next_work(workflow: str, ctx: UserProject) -> Work | Response:
 )
 def claim_slot(workflow: str, slot: int, ctx: UserProject) -> Work:
     """Claim one particular open slot, for an interface that lets people choose. It is
-    refused (403) if you may not take it: you do not hold a role for the stage, or you have
-    already labeled or released this item."""
+    refused (403) if you may not take it, for example because you do not hold a role for the
+    stage or have already labeled this item, and (409) while its stage or workflow is
+    paused. A slot you gave back earlier may be claimed again."""
     claimed = ctx.engine.claim(workflow, slot, ctx.actor)
     return _work(ctx, workflow, claimed.slot)
 
@@ -127,7 +129,7 @@ def submit_label(workflow: str, slot: int, body: SubmitIn, ctx: UserProject) -> 
     responses=errors(403),
 )
 def release_slot(workflow: str, slot: int, body: ReleaseIn, ctx: UserProject) -> Slot:
-    """Give a slot you hold back to the pool, with a reason. You will not be offered this
-    item in this stage again."""
+    """Give a slot you hold back to the pool, with a reason. It is offered to you again only
+    after all your other work. A slot can be given back while its stage is paused."""
     ctx.engine.release(workflow, slot, ctx.actor, body.reason)
     return ctx.engine.slot(workflow, slot)

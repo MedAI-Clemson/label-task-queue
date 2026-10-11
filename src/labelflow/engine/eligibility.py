@@ -1,4 +1,4 @@
-"""Who may claim which slot.
+"""Who may claim which slot, and in which order slots are offered.
 
 Used by ``request_work`` to pick a slot and by ``explain`` to say why a slot is waiting, so
 the two can never disagree.
@@ -10,11 +10,14 @@ To claim a slot, a person must:
 2. if the slot is reserved (``labels_per_item: all``), be the person it is reserved for;
 3. not have labeled this item anywhere in this workflow (no self-review; nobody labels the
    same item twice in a workflow);
-4. hold no other claim on this item;
-5. not have released this item in this stage before.
+4. hold no other claim on this item.
 
-Rule 5 is ours, not the design note's: without it, a release would hand the same slot
-straight back to the person who just released it, at the front of the default order.
+A person who released an item in a stage may claim it there again, but ``request_work``
+offers it to them last, after every other slot they may claim (``offered_last``). Without
+that, a release would hand the same slot straight back, at the front of the default order.
+
+A pause (see ``queries.blocking_pauses``) is not a matter of eligibility: it stops everyone's
+claims in a stage, so the engine checks it separately.
 """
 
 from __future__ import annotations
@@ -69,6 +72,10 @@ def why_not(person: Person, slot: Row, stage_roles: Sequence[str]) -> str | None
     claim = person.claims.get(item)
     if claim is not None and claim["slot"] != slot["slot"]:
         return f"{user} holds a claim on this item in {claim['stage']}"
-    if (slot["stage"], item) in person.released:
-        return f"{user} released this item in {slot['stage']} before"
     return None
+
+
+def offered_last(person: Person, slot: Row) -> bool:
+    """Whether the person released this item in this stage before, so that ``request_work``
+    offers the slot to them only after all their other work."""
+    return (slot["stage"], slot["item"]) in person.released

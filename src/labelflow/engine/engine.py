@@ -22,7 +22,7 @@ from labelflow.engine import events as ev
 from labelflow.engine.config import WorkflowConfig, role_warnings
 from labelflow.engine.config.models import NAME_PATTERN
 from labelflow.engine.edits import ChangePreview, ConfigSource, prepare_edit
-from labelflow.engine.eligibility import Person, load_person, why_not
+from labelflow.engine.eligibility import Person, load_person, offered_last, why_not
 from labelflow.engine.errors import (
     AlreadyExists,
     EditRefused,
@@ -31,6 +31,7 @@ from labelflow.engine.errors import (
     InvalidShown,
     NotAllowed,
     NotEligible,
+    Paused,
     SlotNotYours,
     UnknownDataset,
     UnknownLabelTaskRef,
@@ -44,13 +45,16 @@ from labelflow.engine.export import export_items, export_labels, sampling_report
 from labelflow.engine.flow import Flow
 from labelflow.engine.queries import (
     active_config,
+    active_pause,
     and_list,
+    blocking_pauses,
     config_at,
     did_you_mean,
     held_roles,
     item_row,
     labels_of,
     next_id,
+    pause_text,
     role_holders,
     stage_of,
     workflow_item,
@@ -58,7 +62,14 @@ from labelflow.engine.queries import (
 )
 from labelflow.engine.store import Store
 from labelflow.engine.tables import Row
-from labelflow.engine.views import ConsensusShown, PriorLabel, Slot, WorkPacket
+from labelflow.engine.views import (
+    ConsensusShown,
+    Pause,
+    PauseState,
+    PriorLabel,
+    Slot,
+    WorkPacket,
+)
 from labelflow.labeltask import Label, LabelTaskRegistry, LabelValidationError, UnknownLabelTask
 
 Clock = Callable[[], datetime]
@@ -384,19 +395,25 @@ class Engine:
         """Claim the next slot for this person, or return the one they already hold.
 
         A person holds at most one claim per workflow. The order: slots in later-listed
-        stages first (so items finish), then the oldest admitted item, then slot index.
-        Returns None when nothing is available to this person.
+        stages first (so items finish), then the oldest admitted item, then slot index;
+        except that slots of items the person released in that stage come after all the
+        others. Slots of a paused stage or workflow are not handed out. Returns None when
+        nothing is available to this person.
         """
         _check_text(user, "user")
         with self.store.transaction():
             version, config = active_config(self.store, workflow)
             mine = self.store.select("slots", workflow=workflow, status="claimed", claimed_by=user)
             if mine:
-                return Slot.from_row(mine[0])
+                return Slot.from_row(mine[0])  # a pause does not take a held claim away
             person = load_person(self.store, workflow, user)
-            if not person.roles:
+            if not person.roles or active_pause(self.store, workflow) is not None:
                 return None
-            position = {stage.name: i for i, stage in enumerate(config.stages)}
+            position = {
+                stage.name: i
+                for i, stage in enumerate(config.stages)
+                if active_pause(self.store, workflow, stage.name) is None
+            }
             candidates = [
                 slot
                 for slot in self.store.select("slots", workflow=workflow, status="open")
@@ -407,18 +424,31 @@ class Engine:
                 return None
             chosen = min(
                 candidates,
-                key=lambda s: (-position[s["stage"]], s["admitted_seq"], s["index"], s["slot"]),
+                key=lambda s: (
+                    offered_last(person, s),
+                    -position[s["stage"]],
+                    s["admitted_seq"],
+                    s["index"],
+                    s["slot"],
+                ),
             )
             how = (
                 "asked for work; first eligible open slot in the default order (later stages "
                 "first, then the oldest admitted item)"
             )
+            if offered_last(person, chosen):
+                how += (
+                    f"; {user} released this item in {chosen['stage']} before, so it was "
+                    "offered only after their other work"
+                )
             return self._claim(workflow, chosen, person, version, how)
 
     def claim(self, workflow: str, slot_id: int, user: str) -> Slot:
         """Claim one particular open slot, for an interface that lets people choose.
 
-        Raises NotEligible, with the reason, when the person may not claim it.
+        Raises Paused when the slot's stage or workflow is paused, and NotEligible, with the
+        reason, when the person may not claim it. A slot the person released before may be
+        claimed again this way.
         """
         _check_text(user, "user")
         with self.store.transaction():
@@ -434,6 +464,12 @@ class Engine:
                 )
             if slot["status"] != "open":
                 raise NotAllowed(f"Slot {slot_id} is not open: it is {slot['status']}.")
+            pauses = blocking_pauses(self.store, workflow, slot["stage"])
+            if pauses:
+                raise Paused(
+                    f"Slot {slot_id} cannot be claimed now: {' and '.join(pauses)}. It can be "
+                    "claimed once that is resumed."
+                )
             person = load_person(self.store, workflow, user)
             reason = why_not(person, slot, stage_of(config, slot["stage"]).roles)
             if reason is not None:
@@ -632,8 +668,9 @@ class Engine:
     def release(self, workflow: str, slot_id: int, user: str, reason: str) -> None:
         """Give a claimed slot back to the pool, with a reason.
 
-        The person will not be offered this item in this stage again (our rule; see
-        ``eligibility``).
+        The person may claim it again, but ``request_work`` offers it to them only after all
+        their other work (see ``eligibility``). A release is allowed while the stage or the
+        workflow is paused.
         """
         _check_text(reason, "reason")
         with self.store.transaction():
@@ -659,25 +696,26 @@ class Engine:
     def exclude_item(self, workflow: str, item: str, actor: str | None, reason: str) -> list[int]:
         """Take an item out of this workflow, for example an image that cannot be labeled.
 
-        Its open and claimed slots are cancelled; it gets status excluded and no final label.
-        Returns the cancelled slot ids. An item that already has its final label cannot be
-        excluded.
+        Its open and claimed slots are cancelled, and it gets status excluded. An item still
+        in progress gets no final label. An item that already has its final label may be
+        excluded too, for example when the image turns out to be wrong: its final-label
+        record and its labels are kept as history, but its status is excluded from then on.
+        Returns the cancelled slot ids.
         """
         _check_text(reason, "reason")
         with self.store.transaction():
             row = workflow_item(self.store, workflow, item)
             if row["status"] == "excluded":
                 raise NotAllowed(f"Item {item} is already excluded from {workflow}.")
-            if row["status"] == "done":
-                raise NotAllowed(
-                    f"Item {item} already has its final label in {workflow}; it cannot be excluded."
-                )
             version, _ = active_config(self.store, workflow)
             cancelled = tuple(
                 r["slot"]
                 for r in self.store.select("slots", workflow=workflow, item=item)
                 if r["status"] in ("open", "claimed")
             )
+            because = f"excluded by {actor}: {reason}"
+            if row["status"] == "done":
+                because += "; its earlier final label is kept as history"
             self.store.append(
                 ev.ItemExcluded(
                     at=self._now(),
@@ -687,7 +725,7 @@ class Engine:
                     config_version=version,
                     reason=reason,
                     cancelled_slots=cancelled,
-                    because=f"excluded by {actor}: {reason}",
+                    because=because,
                 )
             )
             return list(cancelled)
@@ -727,7 +765,91 @@ class Engine:
                 flow.slots_closed(stage, item)
             return [s["slot"] for slots in by_item.values() for s in slots]
 
+    def pause_workflow(self, workflow: str, actor: str | None, reason: str) -> None:
+        """Stop all claims in the workflow until it is resumed.
+
+        A pause stops claims only: items keep arriving and being admitted (their slots open
+        and wait), claims already held can still be submitted or released, and consensus,
+        downstream admission and finalization go on as usual.
+        """
+        self._pause(workflow, None, actor, reason, pause=True)
+
+    def resume_workflow(self, workflow: str, actor: str | None, reason: str) -> None:
+        """Allow claims in the workflow again. Stages paused on their own stay paused."""
+        self._pause(workflow, None, actor, reason, pause=False)
+
+    def pause_stage(self, workflow: str, stage: str, actor: str | None, reason: str) -> None:
+        """Stop claims in one stage until it is resumed (see ``pause_workflow``). The pause
+        stays across config versions while the stage exists."""
+        self._pause(workflow, stage, actor, reason, pause=True)
+
+    def resume_stage(self, workflow: str, stage: str, actor: str | None, reason: str) -> None:
+        """Allow claims in a paused stage again (unless the whole workflow is paused)."""
+        self._pause(workflow, stage, actor, reason, pause=False)
+
+    def _pause(
+        self, workflow: str, stage: str | None, actor: str | None, reason: str, pause: bool
+    ) -> None:
+        """Log a pause or a resume of a workflow (``stage`` None) or of one of its stages."""
+        _check_text(reason, "reason")
+        with self.store.transaction():
+            version, config = active_config(self.store, workflow)
+            what = f"workflow {workflow}"
+            if stage is not None:
+                stage_of(config, stage)
+                what = f"stage {stage} of {workflow}"
+            current = active_pause(self.store, workflow, stage)
+            if pause and current is not None:
+                raise NotAllowed(f"The {what} is already paused ({pause_text(current)}).")
+            if not pause and current is None:
+                raise NotAllowed(f"The {what} is not paused, so there is nothing to resume.")
+            if pause:
+                kind = ev.StagePaused if stage else ev.WorkflowPaused
+                because = f"paused by {actor}: {reason}; no slot of the {what} can be claimed"
+            else:
+                kind = ev.StageResumed if stage else ev.WorkflowResumed
+                because = f"resumed by {actor}: {reason}; " + self._still_paused(
+                    workflow, stage, config.stage_names, what
+                )
+            self.store.append(
+                kind(
+                    at=self._now(),
+                    actor=actor,
+                    workflow=workflow,
+                    stage=stage,
+                    config_version=version,
+                    reason=reason,
+                    because=because,
+                )
+            )
+
+    def _still_paused(
+        self, workflow: str, stage: str | None, stages: tuple[str, ...], what: str
+    ) -> str:
+        """What a resume opens up, given that the other kind of pause stays as it is."""
+        if stage is not None:
+            if active_pause(self.store, workflow) is not None:
+                return f"its slots can be claimed once workflow {workflow} is resumed too"
+            return f"slots of the {what} can be claimed again"
+        paused = [name for name in stages if active_pause(self.store, workflow, name)]
+        if paused:
+            return f"slots can be claimed again, except in paused stage(s) {and_list(paused)}"
+        return f"slots of the {what} can be claimed again"
+
     # --- reads ----------------------------------------------------------------------------
+
+    def pauses(self, workflow: str) -> PauseState:
+        """What is paused in the workflow now: the workflow itself, and each stage."""
+        with self.store.transaction():
+            _, config = active_config(self.store, workflow)
+            return PauseState(
+                workflow=workflow,
+                paused=Pause.from_row(active_pause(self.store, workflow)),
+                stages={
+                    name: Pause.from_row(active_pause(self.store, workflow, name))
+                    for name in config.stage_names
+                },
+            )
 
     def slot(self, workflow: str, slot_id: int) -> Slot:
         with self.store.transaction():

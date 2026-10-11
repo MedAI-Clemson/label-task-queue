@@ -3,13 +3,17 @@
 Each example starts a small project with one or two workflows (chosen from the configs
 below, which cover labels_per_item 2/3/all/fraction, sample < 1, agreed and disagreed
 branches, score_against and final: none), then runs a random list of commands: role grants
-and revokes, imports, requests for work, submits (valid and invalid), releases, cancels and
-exclusions. Afterwards:
+and revokes, imports, requests for work, explicit claims, submits (valid and invalid),
+releases, cancels, exclusions (also of finalized items), and pauses and resumes of stages and
+whole workflows. Each request for work is checked against the eligibility rules: it hands out
+nothing only when nothing is claimable, and a slot the person released only when nothing
+else is. Afterwards:
 
 - rebuilding from the log gives exactly the same tables;
 - the fingerprint chain verifies;
 - nobody labeled an item twice in a workflow;
 - no slot was ever claimed twice, and every slot is in exactly one consistent state;
+- no slot was claimed while its stage or its workflow was paused;
 - a refused command appended nothing.
 """
 
@@ -27,7 +31,8 @@ from labelflow.engine import (
     verify_chain,
 )
 from labelflow.engine.config import WorkflowConfig
-from labelflow.engine.queries import live_slots
+from labelflow.engine.eligibility import load_person, offered_last, why_not
+from labelflow.engine.queries import active_config, active_pause, live_slots
 from labelflow.labeltask import LabelTaskRegistry
 from labelflow.labeltask.standin import StandInLabelTask
 
@@ -98,6 +103,7 @@ KINDS = (
     + ("request",) * 3
     + ("submit", "submit", "release", "release")
     + ("grant", "revoke", "import", "cancel", "exclude", "invalid")
+    + ("claim", "pause", "resume")
 )
 operations = st.lists(
     st.tuples(st.sampled_from(KINDS), st.integers(0, 99), st.integers(0, 99), st.integers(0, 99)),
@@ -137,6 +143,53 @@ def my_claim(engine, workflow, user):
     return rows[0] if rows else None
 
 
+def claimable(engine: Engine, workflow: str, user: str) -> list[dict]:
+    """The open slots the person may claim now: eligible, and not in a paused stage or
+    workflow (what ``request_work`` chooses from, worked out separately)."""
+    store = engine.store
+    if active_pause(store, workflow) is not None:
+        return []
+    _, config = active_config(store, workflow)
+    person = load_person(store, workflow, user)
+    return [
+        slot
+        for slot in store.select("slots", workflow=workflow, status="open")
+        if slot["stage"] in config.stage_names
+        and active_pause(store, workflow, slot["stage"]) is None
+        and why_not(person, slot, config.stage(slot["stage"]).roles) is None
+    ]
+
+
+def checked_request(engine: Engine, workflow: str, user: str):
+    """``request_work``, checked: None only when nothing is claimable, and a slot the
+    person released only when every claimable slot is one they released."""
+    held = my_claim(engine, workflow, user)
+    options = [] if held else claimable(engine, workflow, user)
+    person = load_person(engine.store, workflow, user)
+    slot = engine.request_work(workflow, user)
+    if held:
+        assert slot is not None and slot.slot == held["slot"]
+    elif slot is None:
+        assert not options, f"{user} got no work but could claim {options}"
+    else:
+        assert slot.slot in {o["slot"] for o in options}
+        if offered_last(person, {"stage": slot.stage, "item": slot.item}):
+            assert all(offered_last(person, o) for o in options)
+    return slot
+
+
+def pause_or_resume(engine: Engine, workflow: str, kind: str, b: int) -> None:
+    """Pause or resume the whole workflow (one time in three) or one of its stages."""
+    stages = [s["name"] for s in CONFIGS[workflow.split("_", 1)[1]]["stages"]]
+    reason = f"random {kind}"
+    if b % 3 == 0:
+        command = engine.pause_workflow if kind == "pause" else engine.resume_workflow
+        command(workflow, "admin", reason)
+    else:
+        command = engine.pause_stage if kind == "pause" else engine.resume_stage
+        command(workflow, stages[b % len(stages)], "admin", reason)
+
+
 def run(engine: Engine, workflows: list[str], op: tuple) -> None:
     """Carry out one random command. Refusals are fine; they must leave no trace."""
     kind, a, b, c = op
@@ -162,11 +215,17 @@ def run(engine: Engine, workflows: list[str], op: tuple) -> None:
             i = len(engine.store.select("items", dataset="ds"))
             engine.import_item("ds", f"item{i}", f"file:///{i}.png", f"h{i}", gold(i), "admin")
         elif kind == "request":
-            engine.request_work(workflow, user)
+            checked_request(engine, workflow, user)
+        elif kind == "claim":
+            open_slots = engine.store.select("slots", workflow=workflow, status="open")
+            if open_slots:
+                engine.claim(workflow, open_slots[b % len(open_slots)]["slot"], user)
+        elif kind in ("pause", "resume"):
+            pause_or_resume(engine, workflow, kind, b)
         elif kind in ("work", "submit", "invalid"):
             claim = my_claim(engine, workflow, user)
             if claim is None and kind == "work":
-                slot = engine.request_work(workflow, user)
+                slot = checked_request(engine, workflow, user)
                 claim = slot and {"slot": slot.slot}
             if claim is None:
                 return
@@ -236,20 +295,27 @@ def check_invariants(engine: Engine, workflows: list[str]) -> None:
             if row["status"] == "in_progress":
                 assert live and final is None
             elif row["status"] == "excluded":
-                assert not live and final is None
+                assert not live  # a final label from before the exclusion is kept
             else:
                 assert not live and final is not None
                 if config.final == "none":
                     assert final["status"] == "none"
 
-    # From the log: no slot is claimed while claimed; a claimant held a stage role then.
+    # From the log: no slot is claimed while claimed, nor while paused; a claimant held a
+    # stage role then.
     state: dict[int, str] = {}
+    paused: set[tuple[str, str | None]] = set()
     for e in events:
+        if e.type in ("workflow_paused", "stage_paused"):
+            paused.add((e.workflow, e.stage))
+        elif e.type in ("workflow_resumed", "stage_resumed"):
+            paused.remove((e.workflow, e.stage))
         if e.type == "admission_decided":
             for new in e.slots:
                 state[new.slot] = "open"
         elif e.type == "slot_claimed":
             assert state[e.slot] == "open", f"slot {e.slot} claimed twice"
+            assert not {(e.workflow, None), (e.workflow, e.stage)} & paused, "claimed in a pause"
             state[e.slot] = "claimed"
             config = WorkflowConfig.model_validate(
                 config_for(e.workflow.split("_", 1)[1], e.workflow)

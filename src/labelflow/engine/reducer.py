@@ -305,16 +305,41 @@ def _cancel(tables: Tables, slots: tuple[int, ...], seq: int) -> None:
 
 
 def _item_excluded(tables: Tables, e: ev.ItemExcluded) -> None:
+    """Mark the item excluded. A finalized item keeps its final-label record and labels as
+    history, and its ``closed_seq`` stays the finalization: it stopped moving then."""
     _cancel(tables, e.cancelled_slots, e.seq)
-    tables.update(
-        "workflow_items",
-        {"workflow": e.workflow, "item": e.item},
-        {"status": "excluded", "closed_seq": e.seq},
-    )
+    key = {"workflow": e.workflow, "item": e.item}
+    closed = tables.get("workflow_items", **key)["closed_seq"]
+    tables.update("workflow_items", key, {"status": "excluded", "closed_seq": closed or e.seq})
 
 
 def _slots_cancelled(tables: Tables, e: ev.SlotsCancelled) -> None:
     _cancel(tables, e.slots, e.seq)
+
+
+def _set_pause(tables: Tables, table: str, key: dict[str, str], e: Any, paused: bool) -> None:
+    """Record the latest pause or resume of a workflow or stage (insert on the first one)."""
+    changes = {"paused": paused, "by": e.actor, "at": _time(e), "reason": e.reason, "seq": e.seq}
+    if tables.get(table, **key) is None:
+        tables.insert(table, key | changes)
+    else:
+        tables.update(table, key, changes)
+
+
+def _workflow_paused(tables: Tables, e: ev.WorkflowPaused) -> None:
+    _set_pause(tables, "workflow_pauses", {"workflow": e.workflow}, e, True)
+
+
+def _workflow_resumed(tables: Tables, e: ev.WorkflowResumed) -> None:
+    _set_pause(tables, "workflow_pauses", {"workflow": e.workflow}, e, False)
+
+
+def _stage_paused(tables: Tables, e: ev.StagePaused) -> None:
+    _set_pause(tables, "stage_pauses", {"workflow": e.workflow, "stage": e.stage}, e, True)
+
+
+def _stage_resumed(tables: Tables, e: ev.StageResumed) -> None:
+    _set_pause(tables, "stage_pauses", {"workflow": e.workflow, "stage": e.stage}, e, False)
 
 
 def _item_finalized(tables: Tables, e: ev.ItemFinalized) -> None:
@@ -358,5 +383,9 @@ _REDUCERS: dict[str, Callable[[Tables, Any], None]] = {
     "stage_completed": _stage_completed,
     "item_excluded": _item_excluded,
     "slots_cancelled": _slots_cancelled,
+    "workflow_paused": _workflow_paused,
+    "workflow_resumed": _workflow_resumed,
+    "stage_paused": _stage_paused,
+    "stage_resumed": _stage_resumed,
     "item_finalized": _item_finalized,
 }

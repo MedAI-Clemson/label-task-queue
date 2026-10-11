@@ -106,12 +106,18 @@ def work(engine: Engine, workflow: str, user: str, value: str) -> int | None:
     return slot.slot
 
 
-def run_script(engine: Engine, workflow: str = "wf") -> None:
+def run_script(engine: Engine, workflow: str = "wf", pauses: bool = True) -> None:
     """Commands that touch most tables: a claim is released, an item is excluded, two
-    labelers disagree on some items and an expert adjudicates one."""
+    labelers disagree on some items and an expert adjudicates one. With ``pauses``, the
+    workflow and a stage are paused and resumed on the way (filling the pause tables)."""
     slot = engine.request_work(workflow, "ana")
     engine.release(workflow, slot.slot, "ana", "changed my mind")
     engine.exclude_item(workflow, "img_3", "admin", "unreadable")
+    if pauses:
+        engine.pause_workflow(workflow, "admin", "checking the scanner")
+        engine.pause_stage(workflow, "annotate", "admin", "new guidelines")
+        engine.resume_workflow(workflow, "admin", "scanner is fine")
+        engine.resume_stage(workflow, "annotate", "admin", "guidelines are out")
     for value in ("cat", "dog", "cat"):
         work(engine, workflow, "ana", value)
         work(engine, workflow, "ben", "cat")

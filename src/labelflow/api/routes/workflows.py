@@ -120,7 +120,29 @@ class Progress(BaseModel):
     stages: list[StageProgress] = Field(description="Slots by stage.")
 
 
+class PauseOut(BaseModel):
+    by: str | None = Field(description="Who paused it.")
+    since: datetime = Field(description="When it was paused (UTC).")
+    reason: str = Field(description="Why it was paused, as given by the person who paused it.")
+
+
+class StageDetail(StageSummary):
+    paused: bool = Field(
+        description="Whether the stage is paused: none of its slots can be claimed, though "
+        "items keep arriving and claims already held can still be submitted."
+    )
+    pause: PauseOut | None = Field(description="Who paused the stage, when and why, if paused.")
+
+
 class WorkflowDetail(WorkflowSummary):
+    stages: list[StageDetail] = Field(description="Its stages, in order, with their pause state.")
+    paused: bool = Field(
+        description="Whether the whole workflow is paused: no slot can be claimed in any "
+        "stage. Stages paused on their own stay paused when the workflow is resumed."
+    )
+    pause: PauseOut | None = Field(
+        description="Who paused the workflow, when and why, if it is paused."
+    )
     seed: int | None = Field(
         description="The seed that fixes the workflow's random draws. Only administrators see "
         "it: knowing it would tell labelers which of their items will be reviewed."
@@ -258,9 +280,9 @@ def list_workflows(ctx: UserProject) -> list[WorkflowSummary]:
     summary="Show a workflow",
 )
 def get_workflow(workflow: str, ctx: UserProject) -> WorkflowDetail:
-    """Show a workflow: the config in force with every default written out, its diagram, and
-    its progress (items by status, slots by stage). Administrators can see every workflow;
-    anyone else only those they hold a role in."""
+    """Show a workflow: the config in force with every default written out, its diagram, its
+    progress (items by status, slots by stage) and what is paused. Administrators can see
+    every workflow; anyone else only those they hold a role in."""
     store = ctx.engine.store
     used = reads.workflow_roles(store, workflow)  # also answers 404 for an unknown workflow
     if not ctx.user.is_admin and not reads.user_roles(store, ctx.actor) & used:

@@ -23,6 +23,7 @@ EXPECTED = {
     "AlreadyExists": 409,
     "VersionConflict": 409,
     "NotAllowed": 409,
+    "Paused": 409,
     "NotEligible": 403,
     "SlotNotYours": 403,
     "EditRefused": 422,

@@ -156,24 +156,50 @@ def test_the_accounts_migration_adds_the_deployment_tables(migrated):
     assert [i["name"] for i in inspector.get_indexes("sessions")] == ["ix_sessions_user_id"]
 
 
-def test_the_accounts_migration_keeps_an_existing_project(config, url, build_engine, script):
-    """Upgrading a database made at revision 0001 leaves its events and tables untouched."""
-    command.upgrade(config, "0001")
+def test_upgrading_keeps_an_existing_project(config, url, build_engine, script):
+    """A project made before revisions 0002 and 0003 comes through the upgrade untouched.
+
+    The store needs every table of the current schema, so the project is made at the head
+    revision without pausing anything, and the database is taken back to 0001 (which drops
+    only the tables added since) before it is upgraded again.
+    """
+    command.upgrade(config, "head")
     engine = connect(url)
     try:
         store = SqlStore(engine, "demo")
-        script(build_engine(store))
+        script(build_engine(store), pauses=False)
         before = store.snapshot()
         engine.dispose()
+        command.downgrade(config, "0001")
+        tables = set(sa.inspect(engine).get_table_names())
+        assert not tables & {"accounts", "sessions", "projects", "workflow_pauses", "stage_pauses"}
+        assert "events" in tables
+        engine.dispose()
         command.upgrade(config, "head")
-        engine = connect(url)
         store = SqlStore(engine, "demo")
         assert store.snapshot() == before
         assert store.verify_derived().identical
-        command.downgrade(config, "0001")
-        tables = set(sa.inspect(engine).get_table_names())
-        assert not tables & {"accounts", "sessions", "projects"}
-        assert "events" in tables
+    finally:
+        engine.dispose()
+
+
+def test_the_pauses_migration_adds_and_removes_its_two_tables(config, url):
+    command.upgrade(config, "0002")
+    engine = connect(url)
+    try:
+        assert not {"workflow_pauses", "stage_pauses"} & set(sa.inspect(engine).get_table_names())
+        engine.dispose()
+        command.upgrade(config, "0003")
+        inspector = sa.inspect(engine)
+        assert inspector.get_pk_constraint("stage_pauses")["constrained_columns"] == [
+            "project",
+            "workflow",
+            "stage",
+        ]
+        assert {"workflow_pauses", "stage_pauses"} <= set(inspector.get_table_names())
+        engine.dispose()
+        command.downgrade(config, "0002")
+        assert not {"workflow_pauses", "stage_pauses"} & set(sa.inspect(engine).get_table_names())
     finally:
         engine.dispose()
 

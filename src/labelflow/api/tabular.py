@@ -19,6 +19,7 @@ ITEM_COLUMNS: dict[str, str] = {
     "uri": "text",
     "content_hash": "text",
     "status": "text",
+    "final_status": "text",
     "final_label": "text",
     "source_stage": "text",
     "label_ids": "text",

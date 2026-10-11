@@ -76,13 +76,53 @@ def test_reserved_slot_whose_person_lost_the_role(build, cfg):
     ]
 
 
-def test_released_item_is_not_offered_back(build, cfg):
-    engine = build(cfg(ANNOTATE), items=1, grants={"ana": ("annotator",)})
+def test_a_released_item_is_offered_back_only_after_other_work(build, cfg):
+    engine = build(cfg(ANNOTATE), items=2, grants={"ana": ("annotator",)})
     slot = engine.request_work("wf", "ana")
     engine.release("wf", slot.slot, "ana", "cannot see the image")
     assert reasons(engine, "img_001") == [
-        "slot 1 of annotate (id 1) is open; nobody can claim it: ana is the only holder of role "
-        "annotator, and ana released this item in annotate before"
+        "slot 1 of annotate (id 1) is open; role annotator is held by ana; ana released it "
+        "before; it is offered to ana only after their other work"
+    ]
+    other = engine.request_work("wf", "ana")
+    assert other.item == "img_002"
+    assert reasons(engine, "img_001") == [
+        "slot 1 of annotate (id 1) is open; role annotator is held by ana; ana released it "
+        "before; it is offered to ana only after their other work, and is working on slot "
+        f"{other.slot} (item img_002, annotate) now"
+    ]
+
+
+def test_an_open_slot_in_a_paused_stage_says_who_paused_it_when_and_why(build, cfg, work):
+    engine = build(cfg(ANNOTATE, REVIEW, final=["review", "annotate"]), items=1)
+    work(engine, "wf", "ana")
+    engine.pause_stage("wf", "review", "admin", "experts are in training")
+    (reason,) = reasons(engine, "img_001")
+    assert reason.startswith(
+        "slot 1 of review (id 2) is open; it waits because stage review is paused (by admin "
+        "since 2026-10-10 "
+    )
+    assert reason.endswith(" UTC: experts are in training)")
+    engine.pause_workflow("wf", "admin", "audit")
+    (reason,) = reasons(engine, "img_001")
+    assert "it waits because workflow wf is paused (by admin since " in reason
+    assert ": audit) and stage review is paused (by admin since " in reason
+    engine.resume_stage("wf", "review", "admin", "training done")
+    (reason,) = reasons(engine, "img_001")
+    assert "workflow wf is paused" in reason and "stage review" not in reason
+    engine.resume_workflow("wf", "admin", "audit done")
+    assert reasons(engine, "img_001")[0].endswith(
+        "dr_smith can claim it and has not asked for work yet"
+    )
+
+
+def test_a_held_claim_in_a_paused_stage_is_still_shown_as_claimed(build, cfg):
+    engine = build(cfg(ANNOTATE), items=1)
+    slot = engine.request_work("wf", "ana")
+    engine.pause_stage("wf", "annotate", "admin", "hold on")
+    assert reasons(engine, "img_001") == [
+        f"slot 1 of annotate (id 1) is claimed by ana since "
+        f"{slot.claimed_at.strftime('%Y-%m-%d %H:%M')} UTC"
     ]
 
 
@@ -138,3 +178,21 @@ def test_explain_excluded_and_unknown_items(build, cfg):
     assert explanation.trace[-1].because == "excluded by admin: corrupt file"
     with pytest.raises(UnknownItem, match="not in workflow"):
         engine.explain("wf", "img_404")
+
+
+def test_explain_an_item_excluded_after_its_final_label(build, cfg, work):
+    engine = build(cfg(ANNOTATE), items=1)
+    work(engine, "wf", "ana", "cat")
+    engine.exclude_item("wf", "img_001", "admin", "wrong patient")
+    explanation = engine.explain("wf", "img_001")
+    assert explanation.status == "excluded" and explanation.waiting == ()
+    assert explanation.final.status == "final" and explanation.final.label == {"value": "cat"}
+    types = [t.type for t in explanation.trace]
+    assert types[-2:] == ["item_finalized", "item_excluded"]
+    assert explanation.trace[-1].because == (
+        "excluded by admin: wrong patient; its earlier final label is kept as history"
+    )
+    text = explanation.render()
+    assert text.startswith("item img_001  in workflow wf  status: excluded\n")
+    assert 'before it was excluded: final label {"value":"cat"}  (config v1)' in text
+    assert "excluded     from wf (wrong patient); slots cancelled: none" in text

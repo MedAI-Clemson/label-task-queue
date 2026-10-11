@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import secrets
 from dataclasses import replace
 
 import pytest
@@ -21,8 +22,8 @@ def login(client, username, password, status=200):
     return response
 
 
-def test_login_gives_a_token_and_a_cookie(client, admin, expect):
-    response = login(client, "root", "correct horse battery")
+def test_login_gives_a_token_and_a_cookie(client, admin, expect, password):
+    response = login(client, "root", password)
     body = response.json()
     assert body["token_type"] == "bearer"
     assert body["user"] == {"user_id": "root", "display_name": "Root", "is_admin": True}
@@ -36,9 +37,9 @@ def test_login_gives_a_token_and_a_cookie(client, admin, expect):
     assert "Secure" not in cookie
 
 
-def test_the_cookie_alone_logs_you_in(app, admin):
+def test_the_cookie_alone_logs_you_in(app, admin, password):
     with TestClient(app) as browser:  # a client with its own cookie jar
-        login(browser, "root", "correct horse battery")
+        login(browser, "root", password)
         assert browser.get("/auth/me").json()["user_id"] == "root"
 
 
@@ -50,17 +51,19 @@ def test_the_bearer_token_logs_you_in(admin, expect):
     }
 
 
-def test_the_cookie_is_marked_secure_when_asked(settings, label_tasks, admin, clock):
+def test_the_cookie_is_marked_secure_when_asked(settings, label_tasks, admin, clock, password):
     with TestClient(
         create_app(replace(settings, cookie_secure=True), label_tasks=label_tasks)
     ) as c:
-        response = login(c, "root", "correct horse battery")
+        response = login(c, "root", password)
         assert "Secure" in response.headers["set-cookie"]
 
 
-def test_a_wrong_password_and_an_unknown_user_get_the_same_answer(client, admin):
-    wrong = login(client, "root", "not the password", 401)
-    unknown = login(client, "nobody", "correct horse battery", 401)
+def test_a_wrong_password_and_an_unknown_user_get_the_same_answer(
+    client, admin, password, new_password
+):
+    wrong = login(client, "root", new_password(), 401)
+    unknown = login(client, "nobody", password, 401)
     assert wrong.json() == unknown.json()
     assert wrong.json()["detail"] == "Wrong username or password."
     assert wrong.headers["www-authenticate"] == "Bearer"
@@ -73,12 +76,14 @@ def test_login_needs_both_fields(client):
     assert "password: Field required" in response.json()["problems"]
 
 
-def test_a_deactivated_account_cannot_log_in(client, admin, ana, expect):
+def test_a_deactivated_account_cannot_log_in(client, admin, ana, expect, password, new_password):
     expect(admin.post("/accounts/ana/deactivate"))
-    response = login(client, "ana", "correct horse battery", 401)
+    response = login(client, "ana", password, 401)
     assert response.json()["detail"] == "This account has been deactivated. Ask an administrator."
     # the message is only given to someone who knows the password
-    assert login(client, "ana", "guess", 401).json()["detail"] == "Wrong username or password."
+    assert (
+        login(client, "ana", new_password(), 401).json()["detail"] == "Wrong username or password."
+    )
 
 
 def test_no_token_is_refused(anon, expect):
@@ -94,9 +99,9 @@ def test_a_made_up_token_is_refused(client):
     assert "not valid any more" in response.json()["detail"]
 
 
-def test_a_bad_bearer_token_is_not_rescued_by_a_good_cookie(app, admin):
+def test_a_bad_bearer_token_is_not_rescued_by_a_good_cookie(app, admin, password):
     with TestClient(app) as browser:
-        login(browser, "root", "correct horse battery")
+        login(browser, "root", password)
         assert browser.get("/auth/me").status_code == 200
         bad = browser.get("/auth/me", headers={"Authorization": "Bearer made-up"})
         assert bad.status_code == 401
@@ -126,9 +131,9 @@ def test_a_deactivated_account_loses_its_login_at_once(admin, ana, expect):
     assert "deactivated" in response.json()["detail"]
 
 
-def test_logging_out_ends_the_login(app, admin, settings):
+def test_logging_out_ends_the_login(app, admin, settings, password):
     with TestClient(app) as browser:
-        token = login(browser, "root", "correct horse battery").json()["token"]
+        token = login(browser, "root", password).json()["token"]
         response = browser.post("/auth/logout")
         assert response.status_code == 204
         assert "labelflow_session=" in response.headers["set-cookie"]
@@ -148,9 +153,9 @@ def test_logging_out_when_not_logged_in_is_harmless(anon):
     assert anon.post("/auth/logout").status_code == 204
 
 
-def test_a_login_does_not_end_the_others(client, admin):
-    first = login(client, "root", "correct horse battery").json()["token"]
-    second = login(client, "root", "correct horse battery").json()["token"]
+def test_a_login_does_not_end_the_others(client, admin, password):
+    first = login(client, "root", password).json()["token"]
+    second = login(client, "root", password).json()["token"]
     assert first != second
     client.cookies.clear()
     for token in (first, second, admin.token):
@@ -178,9 +183,9 @@ def test_only_a_fingerprint_of_the_token_is_stored(admin, settings):
 
 ADMIN_ENDPOINTS = [
     ("GET", "/accounts", None),
-    ("POST", "/accounts", {"username": "cy", "password": "long enough password"}),
+    ("POST", "/accounts", {"username": "cy", "password": secrets.token_urlsafe(16)}),
     ("POST", "/accounts/ana/deactivate", None),
-    ("POST", "/accounts/ana/password", {"password": "another long password"}),
+    ("POST", "/accounts/ana/password", {"password": secrets.token_urlsafe(16)}),
     ("POST", "/projects", {"name": "other"}),
     ("GET", "/projects/xray/roles", None),
     ("POST", "/projects/xray/roles", {"role": "trainee"}),

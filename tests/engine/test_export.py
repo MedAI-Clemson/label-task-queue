@@ -23,6 +23,7 @@ def test_export_items_one_row_per_item_with_every_status(build, cfg, work):
         "uri": "file:///data/img_001.png",
         "content_hash": "sha-001",
         "status": "final",
+        "final_status": "final",
         "final_label": '{"value":"cat"}',
         "source_stage": "annotate",
         "label_ids": "[1,2]",

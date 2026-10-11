@@ -42,15 +42,13 @@ def test_a_bad_role_name_is_refused(admin, project):
     assert "not a valid role name" in response.json()["detail"]
 
 
-def test_granting_a_role(admin, project, new_person, expect):
+def test_granting_a_role(admin, project, new_person, expect, password):
     new_person("cy")
     result = expect(
         admin.post(f"{project}/roles/annotator/grant", {"user": "cy", "reason": "new hire"})
     )
     assert result == {"role": "annotator", "holders": ["ana", "ben", "cy"], "warnings": []}
-    cy_projects = expect(
-        admin.post("/auth/login", {"username": "cy", "password": "correct horse battery"})
-    )
+    cy_projects = expect(admin.post("/auth/login", {"username": "cy", "password": password}))
     assert cy_projects["user"]["user_id"] == "cy"
 
 

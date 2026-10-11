@@ -10,6 +10,7 @@ Engine error                                            Status
 something unknown (role, dataset, item, workflow, ...)  404
 already exists; edit based on an old version            409
 not allowed in the current state (already excluded...)  409
+a claim while paused; pausing or resuming twice         409
 not eligible; slot not claimed by you                   403
 refused edit; invalid label; malformed request          422
 ======================================================  ======
@@ -37,6 +38,7 @@ from labelflow.engine import (
     NotAllowed,
     NotEligible,
     NotFound,
+    Paused,
     SlotNotYours,
     VersionConflict,
 )
@@ -91,6 +93,7 @@ class Unprocessable(ApiError):
 _STATUS: dict[type[Exception], int] = {
     VersionConflict: 409,
     EditRefused: 422,
+    Paused: 409,  # like NotAllowed: the state forbids it for now, not the person
     NotEligible: 403,
     SlotNotYours: 403,
     NotAllowed: 409,
@@ -168,8 +171,8 @@ _DESCRIPTIONS = {
     401: "You are not logged in, or the login is wrong or has expired.",
     403: "This account may not do this (or the slot is not yours to work on).",
     404: "Nothing with that name exists.",
-    409: "It already exists, the current state does not allow it, or the request was based "
-    "on an old config version.",
+    409: "It already exists, the current state does not allow it (such as a claim while the "
+    "stage is paused), or the request was based on an old config version.",
     422: "The request is not valid. `problems` lists everything that is wrong.",
 }
 

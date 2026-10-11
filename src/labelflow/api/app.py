@@ -60,7 +60,8 @@ TAGS = [
     },
     {
         "name": "admin: actions",
-        "description": "Exclude an item from a workflow, or cancel a stage's open slots.",
+        "description": "Exclude an item from a workflow, cancel a stage's open slots, or "
+        "pause and resume claims in a stage or a whole workflow.",
     },
     {
         "name": "admin: feedback",

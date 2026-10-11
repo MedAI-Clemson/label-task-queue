@@ -57,6 +57,10 @@ class NotEligible(NotAllowed):
     """The person may not work on this slot."""
 
 
+class Paused(NotAllowed):
+    """The slot's stage, or its whole workflow, is paused: nothing in it can be claimed."""
+
+
 class SlotNotYours(NotAllowed):
     """The slot is not currently claimed by the person acting on it."""
 

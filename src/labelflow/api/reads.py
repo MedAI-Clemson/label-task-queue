@@ -18,6 +18,7 @@ from labelflow.engine import UnknownDataset, UnknownRole
 from labelflow.engine.config import resolved_yaml, to_mermaid
 from labelflow.engine.queries import (
     active_config,
+    active_pause,
     config_at,
     did_you_mean,
     held_roles,
@@ -136,13 +137,45 @@ def user_roles(store: Store, user: str) -> set[str]:
         return held_roles(store, user)
 
 
+def _pause(row: Row | None) -> dict[str, Any]:
+    """``paused`` and, when paused, who paused it, since when and why."""
+    if row is None:
+        return {"paused": False, "pause": None}
+    return {"paused": True, "pause": {"by": row["by"], "since": row["at"], "reason": row["reason"]}}
+
+
+def pauses(store: Store, workflow: str) -> dict[str, Any]:
+    """What is paused in the workflow: the workflow itself, and each stage of the active
+    config. The two are independent; a stage's slots can be claimed only when neither is."""
+    with store.transaction():
+        _, config = active_config(store, workflow)
+        return {
+            "workflow": workflow,
+            **_pause(active_pause(store, workflow)),
+            "stages": [
+                {"stage": name, **_pause(active_pause(store, workflow, name))}
+                for name in config.stage_names
+            ],
+        }
+
+
 def workflow_detail(store: Store, workflow: str) -> dict[str, Any]:
-    """The workflow as it runs now: active version, resolved config, diagram and progress."""
+    """The workflow as it runs now: active version, resolved config, diagram, progress and
+    what is paused."""
     with store.transaction():
         row = workflow_row(store, workflow)
         config = active_config(store, workflow)[1]
+        summary = _summary(store, row)
+        paused = pauses(store, workflow)
+        stage_pauses = {entry["stage"]: entry for entry in paused["stages"]}
         return {
-            **_summary(store, row),
+            **summary,
+            "paused": paused["paused"],
+            "pause": paused["pause"],
+            "stages": [
+                stage | {k: stage_pauses[stage["name"]][k] for k in ("paused", "pause")}
+                for stage in summary["stages"]
+            ],
             "seed": row["seed"],
             "resolved_yaml": resolved_yaml(config),
             "diagram": to_mermaid(config),

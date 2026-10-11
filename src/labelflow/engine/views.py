@@ -1,4 +1,4 @@
-"""What the engine hands back to labelers: a claimed slot and the work packet for it."""
+"""What the engine hands back: a claimed slot, the work packet for it, and pause state."""
 
 from __future__ import annotations
 
@@ -77,3 +77,30 @@ class WorkPacket(_View):
             show_prior=self.show_prior,
             consensus_rule_version=self.consensus.rule_version if self.consensus else None,
         )
+
+
+class Pause(_View):
+    """A pause in force: who paused, since when, and why."""
+
+    by: str | None
+    since: datetime
+    reason: str
+
+    @classmethod
+    def from_row(cls, row: Row | None) -> Pause | None:
+        if row is None:
+            return None
+        return cls(by=row["by"], since=row["at"], reason=row["reason"])
+
+
+class PauseState(_View):
+    """What is paused in a workflow now. A pause stops claims only.
+
+    ``stages`` lists the stages of the active config in order, each with its own pause or
+    None. The workflow's pause and the stages' pauses are independent: a slot can be claimed
+    only when neither its workflow nor its stage is paused.
+    """
+
+    workflow: str
+    paused: Pause | None
+    stages: dict[str, Pause | None]

@@ -21,6 +21,10 @@ version they were made under, open slots stay open, and items already past a sta
 sent back to it (backfill is deferred). The engine makes every decision with the version in
 force at that moment, so this needs no special machinery.
 
+**Pauses** are not part of the config. A paused stage stays paused in every later version
+while it exists, and removing a paused stage is allowed on the usual terms (no open or
+claimed slots). The preview mentions each pause in force so the admin is not surprised.
+
 **The counts** describe the items already in the workflow at the moment of the preview (see
 ``StageImpact`` and ``FinalImpact``). Items imported later always follow the version in force
 when they arrive.
@@ -48,9 +52,11 @@ from labelflow.engine.config.problems import percent, plural
 from labelflow.engine.draws import draw
 from labelflow.engine.queries import (
     active_config,
+    active_pause,
     and_list,
     config_at,
     held_roles,
+    pause_text,
     role_holders,
     workflow_row,
 )
@@ -772,6 +778,30 @@ def _stranded_slot_warnings(tables: Tables, workflow: str, changes: list[Change]
     return warnings
 
 
+def _pause_warnings(tables: Tables, workflow: str, new: WorkflowConfig, base: int) -> list[str]:
+    """Say what happens to each pause in force: pauses live outside the config, so they carry
+    over to the new version, or end with a removed stage."""
+    warnings = []
+    paused = active_pause(tables, workflow)
+    if paused is not None:
+        warnings.append(
+            f"The workflow is paused ({pause_text(paused)}); it stays paused under version "
+            f"{base + 1}."
+        )
+    for name in config_at(tables, workflow, base).stage_names:
+        paused = active_pause(tables, workflow, name)
+        if paused is None:
+            continue
+        if name in new.stage_names:
+            warnings.append(
+                f"Stage '{name}' is paused ({pause_text(paused)}); it stays paused under "
+                f"version {base + 1}."
+            )
+        else:
+            warnings.append(f"Stage '{name}' is paused; removing it ends the pause with it.")
+    return warnings
+
+
 def _diff(old: WorkflowConfig, new: WorkflowConfig, base: int) -> str:
     lines = difflib.unified_diff(
         resolved_yaml(old).splitlines(),
@@ -812,6 +842,7 @@ def prepare_edit(
             progress.claimed,
         )
         warnings += more_warnings + _stranded_slot_warnings(tables, workflow, changes)
+        warnings += _pause_warnings(tables, workflow, new, base)
         errors += [change.effect for change in changes if change.applies == "refused"]
         if not changes:
             errors.append(

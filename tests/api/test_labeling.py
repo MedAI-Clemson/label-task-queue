@@ -215,7 +215,7 @@ def test_releasing_a_slot(ana, workflow, expect):
     assert released["slot"] == slot
     assert released["status"] == "open"
     assert released["claimed_by"] is None
-    # ana is not offered the same item again, so she moves on to the next one
+    # ana is offered the same item again only after her other work, so she moves on
     assert expect(ana.post(f"{workflow}/next"))["slot"]["item"] == "img_002"
 
 
@@ -265,12 +265,21 @@ def test_you_cannot_claim_a_slot_you_are_not_eligible_for(dr_smith, workflow):
     assert response.json()["detail"].startswith("dr_smith may not claim slot 5: ")
 
 
-def test_you_cannot_claim_an_item_you_released(ana, workflow, expect):
+def test_you_may_claim_an_item_you_released_again(ana, workflow, expect):
     slot = expect(ana.post(f"{workflow}/slots/5/claim"))["slot"]["slot"]
     expect(ana.post(f"{workflow}/slots/{slot}/release", {"reason": "unreadable"}))
-    response = ana.post(f"{workflow}/slots/{slot}/claim")
-    assert response.status_code == 403
-    assert "released" in response.json()["detail"]
+    again = expect(ana.post(f"{workflow}/slots/{slot}/claim"))
+    assert (again["slot"]["slot"], again["slot"]["claimed_by"]) == (slot, "ana")
+
+
+def test_an_item_you_released_is_offered_to_you_last(ana, workflow, label_with, expect):
+    first = expect(ana.post(f"{workflow}/next"))["slot"]
+    assert first["item"] == "img_001"
+    expect(ana.post(f"{workflow}/slots/{first['slot']}/release", {"reason": "later"}))
+    offered = []
+    while (work := label_with(ana, workflow)) is not None:
+        offered.append(work["slot"]["item"])
+    assert offered == [f"img_{n:03d}" for n in range(2, 21)] + ["img_001"]
 
 
 def test_claiming_an_unknown_slot(ana, workflow):

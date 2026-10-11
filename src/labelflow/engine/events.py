@@ -233,6 +233,12 @@ class StageCompleted(_Event):
 
 
 class ItemExcluded(_Event):
+    """An admin took the item out of the workflow.
+
+    An item that already had its final label may be excluded too: its final-label record and
+    its labels are kept as history, and only its status changes.
+    """
+
     type: Literal["item_excluded"] = "item_excluded"
     reason: str
     cancelled_slots: tuple[int, ...]
@@ -244,6 +250,36 @@ class SlotsCancelled(_Event):
     type: Literal["slots_cancelled"] = "slots_cancelled"
     reason: str
     slots: tuple[int, ...]
+
+
+class WorkflowPaused(_Event):
+    """An admin paused the whole workflow: no slot of it can be claimed until it is resumed.
+
+    A pause stops claims only. Items keep arriving and being admitted, held claims can still
+    be submitted or released, and consensus and finalization go on.
+    """
+
+    type: Literal["workflow_paused"] = "workflow_paused"
+    reason: str
+
+
+class WorkflowResumed(_Event):
+    """An admin resumed a paused workflow. Stages paused on their own stay paused."""
+
+    type: Literal["workflow_resumed"] = "workflow_resumed"
+    reason: str
+
+
+class StagePaused(_Event):
+    """An admin paused one stage: none of its slots can be claimed until it is resumed."""
+
+    type: Literal["stage_paused"] = "stage_paused"
+    reason: str
+
+
+class StageResumed(_Event):
+    type: Literal["stage_resumed"] = "stage_resumed"
+    reason: str
 
 
 class ItemFinalized(_Event):
@@ -275,6 +311,10 @@ Event = Annotated[
     | StageCompleted
     | ItemExcluded
     | SlotsCancelled
+    | WorkflowPaused
+    | WorkflowResumed
+    | StagePaused
+    | StageResumed
     | ItemFinalized,
     Field(discriminator="type"),
 ]

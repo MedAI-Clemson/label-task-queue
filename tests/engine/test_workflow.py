@@ -480,7 +480,7 @@ def test_labels_are_scored_against_the_key_without_changing_routing(build, cfg, 
 # --- release, exclude, cancel -----------------------------------------------------------
 
 
-def test_release_returns_the_slot_and_the_releaser_is_not_offered_it_again(build, cfg):
+def test_release_returns_the_slot_and_offers_it_to_the_releaser_last(build, cfg):
     engine = build(cfg(ANNOTATE), items=2)
     slot = engine.request_work("wf", "ana")
     with pytest.raises(InvalidRequest, match="reason"):
@@ -493,6 +493,61 @@ def test_release_returns_the_slot_and_the_releaser_is_not_offered_it_again(build
     assert engine.slot("wf", slot.slot).status == "open"
     assert engine.request_work("wf", "ana").item == "img_002"
     assert engine.request_work("wf", "ben").item == "img_001"
+
+
+def test_a_released_slot_comes_after_every_other_slot_of_the_releaser(build, cfg):
+    """Even a later stage's slot, which would come first by default, waits behind the rest."""
+    first = {"name": "first_read", "assign_to": "annotator"}
+    second = {"name": "second_read", "assign_to": "annotator"}
+    engine = build(cfg(first, second), items=2, grants={"ana": ("annotator",)})
+    slot = engine.request_work("wf", "ana")
+    assert (slot.stage, slot.item) == ("second_read", "img_001")
+    engine.release("wf", slot.slot, "ana", "need a break from this one")
+    # By default second_read of img_001 would come first again; now every other slot ana
+    # may claim comes before it, including first_read slots.
+    order = []
+    while (claimed := engine.request_work("wf", "ana")) is not None:
+        order.append((claimed.stage, claimed.item))
+        engine.release("wf", claimed.slot, "ana", "just looking")
+        if len(order) == 4:
+            break
+    assert order == [
+        ("second_read", "img_002"),
+        ("first_read", "img_001"),
+        ("first_read", "img_002"),
+        ("second_read", "img_001"),
+    ]
+
+
+def test_the_released_slot_is_offered_again_when_nothing_else_is_left(build, cfg, work):
+    engine = build(cfg(ANNOTATE), items=2, grants={"ana": ("annotator",)})
+    slot = engine.request_work("wf", "ana")
+    engine.release("wf", slot.slot, "ana", "come back later")
+    work(engine, "wf", "ana")  # img_002 first
+    again = engine.request_work("wf", "ana")
+    assert (again.slot, again.item) == (slot.slot, "img_001")
+    claimed = engine.store.events()[-1]
+    assert claimed.because.startswith("ana asked for work; first eligible open slot")
+    assert "ana released this item in annotate before, so it was offered only after" in (
+        claimed.because
+    )
+
+
+def test_a_released_slot_can_be_claimed_explicitly(build, cfg):
+    engine = build(cfg(ANNOTATE), items=2, grants={"ana": ("annotator",)})
+    slot = engine.request_work("wf", "ana")
+    engine.release("wf", slot.slot, "ana", "misclick")
+    assert engine.claim("wf", slot.slot, "ana").claimed_by == "ana"
+    assert rebuild(engine.store.events()).snapshot() == engine.store.snapshot()
+
+
+def test_a_reserved_slot_released_by_its_person_goes_back_to_them(build, cfg):
+    """labels_per_item: all reserves a slot for one person; a release no longer strands it."""
+    gold = {"name": "gold_read", "assign_to": "trainee", "labels_per_item": "all"}
+    engine = build(cfg(gold, final="none"), items=1, grants={"t1": ("trainee",)})
+    slot = engine.request_work("wf", "t1")
+    engine.release("wf", slot.slot, "t1", "lunch")
+    assert engine.request_work("wf", "t1").slot == slot.slot
 
 
 def test_exclude_cancels_open_and_claimed_slots(build, cfg, work):
@@ -511,11 +566,56 @@ def test_exclude_cancels_open_and_claimed_slots(build, cfg, work):
         engine.exclude_item("wf", "img_404", "admin", "no such item")
 
 
-def test_a_finalized_item_cannot_be_excluded(build, cfg, work):
+def test_a_finalized_item_can_be_excluded_and_keeps_its_history(build, cfg, work):
+    engine = build(cfg(ANNOTATE), items=2)
+    work(engine, "wf", "ana", "cat")
+    final_before = final_row(engine, "img_001")
+    labels_before = engine.store.select("labels", workflow="wf", item="img_001")
+    assert engine.exclude_item("wf", "img_001", "admin", "wrong patient") == []
+    excluded = engine.store.events()[-1]
+    assert (excluded.type, excluded.reason, excluded.cancelled_slots) == (
+        "item_excluded",
+        "wrong patient",
+        (),
+    )
+    assert excluded.because == (
+        "excluded by admin: wrong patient; its earlier final label is kept as history"
+    )
+    row = engine.store.get("workflow_items", workflow="wf", item="img_001")
+    assert row["status"] == "excluded"
+    assert row["closed_seq"] == final_before["seq"]  # it stopped moving when finalized
+    assert final_row(engine, "img_001") == final_before
+    assert engine.store.select("labels", workflow="wf", item="img_001") == labels_before
+    assert any(e.type == "item_finalized" for e in events_of(engine, "img_001"))
+    with pytest.raises(NotAllowed, match="already excluded"):
+        engine.exclude_item("wf", "img_001", "admin", "again")
+    assert rebuild(engine.store.events()).snapshot() == engine.store.snapshot()
+
+
+def test_exports_and_reports_of_an_item_excluded_after_its_final_label(build, cfg, work):
+    scored = {**ANNOTATE, "score_against": "gold_key"}
+    engine = build(cfg(scored), items=2, properties=lambda i: {"gold_key": {"value": "cat"}})
+    work(engine, "wf", "ana", "cat")
+    work(engine, "wf", "ana", "dog")
+    engine.exclude_item("wf", "img_001", "admin", "wrong patient")
+    rows = {r["item"]: r for r in engine.export_items("wf")}
+    assert rows["img_001"]["status"] == "excluded"
+    assert rows["img_001"]["final_status"] == "final"
+    assert rows["img_001"]["final_label"] == '{"value":"cat"}'
+    assert rows["img_001"]["source_stage"] == "annotate" and rows["img_001"]["finalized_at"]
+    assert (rows["img_002"]["status"], rows["img_002"]["final_status"]) == ("final", "final")
+    # The labels, scores and arrivals of the excluded item stay in the other exports.
+    assert [r["item"] for r in engine.export_labels("wf")] == ["img_001", "img_002"]
+    (report,) = engine.score_report("wf")
+    assert (report["labels"], report["scored"], report["agreed"]) == (2, 2, 1)
+    assert engine.sampling_report("wf")[0]["arrived"] == 2
+
+
+def test_an_excluded_unfinalized_item_has_no_final_status(build, cfg):
     engine = build(cfg(ANNOTATE), items=1)
-    work(engine, "wf", "ana")
-    with pytest.raises(NotAllowed, match="already has its final label"):
-        engine.exclude_item("wf", "img_001", "admin", "too late")
+    engine.exclude_item("wf", "img_001", "admin", "corrupt")
+    (row,) = engine.export_items("wf")
+    assert (row["status"], row["final_status"], row["final_label"]) == ("excluded", None, None)
 
 
 def test_cancel_open_slots_cancels_only_unclaimed_slots_and_moves_items_on(build, cfg, work):

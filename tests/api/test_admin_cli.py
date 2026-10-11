@@ -13,10 +13,10 @@ from labelflow.api import admin as cli
 from labelflow.api import create_app
 
 
-def env_for(settings, **more):
+def env_for(settings, password, **more):
     return {
         "DATABASE_URI": settings.database_uri,
-        "LABELFLOW_ADMIN_PASSWORD": "a long password",
+        "LABELFLOW_ADMIN_PASSWORD": password,
     } | more
 
 
@@ -26,11 +26,12 @@ def login(settings, label_tasks, username, password):
         return client.post("/auth/login", json={"username": username, "password": password})
 
 
-def test_the_password_can_come_from_the_environment(settings, label_tasks, capsys):
-    status = cli.main(["create-admin", "boss", "--display-name", "The Boss"], env_for(settings))
+def test_the_password_can_come_from_the_environment(settings, label_tasks, capsys, password):
+    env = env_for(settings, password)
+    status = cli.main(["create-admin", "boss", "--display-name", "The Boss"], env)
     assert status == 0
     assert capsys.readouterr().out == "Created the administrator account 'boss'.\n"
-    response = login(settings, label_tasks, "boss", "a long password")
+    response = login(settings, label_tasks, "boss", password)
     assert response.status_code == 200
     assert response.json()["user"] == {
         "user_id": "boss",
@@ -39,15 +40,17 @@ def test_the_password_can_come_from_the_environment(settings, label_tasks, capsy
     }
 
 
-def test_the_password_is_asked_for_twice_when_not_in_the_environment(settings, label_tasks):
-    answers = iter(["typed password", "typed password"])
+def test_the_password_is_asked_for_twice_when_not_in_the_environment(
+    settings, label_tasks, password
+):
+    answers = iter([password, password])
     env = {"DATABASE_URI": settings.database_uri}
     assert cli.main(["create-admin", "boss"], env, prompt=lambda _: next(answers)) == 0
-    assert login(settings, label_tasks, "boss", "typed password").status_code == 200
+    assert login(settings, label_tasks, "boss", password).status_code == 200
 
 
-def test_two_different_passwords_are_refused(settings, capsys):
-    answers = iter(["one password", "another one"])
+def test_two_different_passwords_are_refused(settings, capsys, new_password):
+    answers = iter([new_password(), new_password()])
     env = {"DATABASE_URI": settings.database_uri}
     assert cli.main(["create-admin", "boss"], env, prompt=lambda _: next(answers)) == 1
     assert capsys.readouterr().err == "Error: The two passwords are not the same.\n"
@@ -64,43 +67,40 @@ def test_no_password_at_all_is_refused(settings, capsys):
     assert "Set LABELFLOW_ADMIN_PASSWORD" in capsys.readouterr().err
 
 
-def test_an_existing_account_is_not_replaced(settings, label_tasks, capsys):
-    assert cli.main(["create-admin", "boss"], env_for(settings)) == 0
+def test_an_existing_account_is_not_replaced(settings, label_tasks, capsys, password, new_password):
+    assert cli.main(["create-admin", "boss"], env_for(settings, password)) == 0
     capsys.readouterr()
-    assert (
-        cli.main(
-            ["create-admin", "boss"], env_for(settings, LABELFLOW_ADMIN_PASSWORD="another one")
-        )
-        == 1
-    )
+    assert cli.main(["create-admin", "boss"], env_for(settings, new_password())) == 1
     assert capsys.readouterr().err == "Error: An account named 'boss' already exists.\n"
-    assert login(settings, label_tasks, "boss", "a long password").status_code == 200
+    assert login(settings, label_tasks, "boss", password).status_code == 200
 
 
 @pytest.mark.parametrize(
-    ("username", "password", "message"),
+    ("username", "too_short", "message"),
     [
-        ("Boss", "a long password", "is not a valid username"),
-        ("boss", "short", "The password must be 8 to 256 characters long."),
+        ("Boss", False, "is not a valid username"),
+        ("boss", True, "The password must be 8 to 256 characters long."),
     ],
 )
-def test_a_bad_username_or_password_is_refused(settings, capsys, username, password, message):
-    env = env_for(settings, LABELFLOW_ADMIN_PASSWORD=password)
+def test_a_bad_username_or_password_is_refused(
+    settings, capsys, password, username, too_short, message
+):
+    env = env_for(settings, "x" * 5 if too_short else password)
     assert cli.main(["create-admin", username], env) == 1
     assert message in capsys.readouterr().err
 
 
-def test_the_database_must_be_set_up_first(tmp_path, capsys):
+def test_the_database_must_be_set_up_first(tmp_path, capsys, password):
     env = {
         "DATABASE_URI": f"sqlite:///{tmp_path / 'new.db'}",
-        "LABELFLOW_ADMIN_PASSWORD": "a long password",
+        "LABELFLOW_ADMIN_PASSWORD": password,
     }
     assert cli.main(["create-admin", "boss"], env) == 1
     assert "alembic upgrade head" in capsys.readouterr().err
 
 
-def test_a_bad_setting_is_reported(settings, capsys):
-    env = env_for(settings, LABELFLOW_SESSION_HOURS="soon")
+def test_a_bad_setting_is_reported(settings, capsys, password):
+    env = env_for(settings, password, LABELFLOW_SESSION_HOURS="soon")
     assert cli.main(["create-admin", "boss"], env) == 1
     assert "LABELFLOW_SESSION_HOURS" in capsys.readouterr().err
 
@@ -112,24 +112,24 @@ def test_a_command_is_needed(capsys):
     assert "create-admin" in capsys.readouterr().err
 
 
-def test_it_runs_as_a_module(settings, label_tasks):
+def test_it_runs_as_a_module(settings, label_tasks, password):
     run = subprocess.run(
         [sys.executable, "-m", "labelflow.api.admin", "create-admin", "boss"],
-        env=os.environ | env_for(settings),
+        env=os.environ | env_for(settings, password),
         capture_output=True,
         text=True,
         check=False,
     )
     assert run.returncode == 0, run.stderr
     assert run.stdout == "Created the administrator account 'boss'.\n"
-    assert login(settings, label_tasks, "boss", "a long password").status_code == 200
+    assert login(settings, label_tasks, "boss", password).status_code == 200
 
 
-def test_the_first_admin_has_no_creator(settings, label_tasks, capsys):
-    cli.main(["create-admin", "boss"], env_for(settings))
+def test_the_first_admin_has_no_creator(settings, label_tasks, capsys, password):
+    cli.main(["create-admin", "boss"], env_for(settings, password))
     with TestClient(create_app(settings, label_tasks=label_tasks)) as client:
-        token = client.post(
-            "/auth/login", json={"username": "boss", "password": "a long password"}
-        ).json()["token"]
+        token = client.post("/auth/login", json={"username": "boss", "password": password}).json()[
+            "token"
+        ]
         (account,) = client.get("/accounts", headers={"Authorization": f"Bearer {token}"}).json()
     assert account["created_by"] is None

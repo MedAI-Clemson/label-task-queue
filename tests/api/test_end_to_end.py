@@ -147,9 +147,8 @@ stages:
 """
 
 
-def test_a_project_with_an_ontology_folder(settings, tmp_path):
+def test_a_project_with_an_ontology_folder(settings, tmp_path, password):
     """The same flow with the real ontology task, loaded from LABELFLOW_LABEL_TASKS."""
-    password = "correct horse battery"
     ontologies = tmp_path / "ontologies"
     ontologies.mkdir()
     shutil.copy(ROOT / "examples" / "ontologies" / "chest_xray.yaml", ontologies)

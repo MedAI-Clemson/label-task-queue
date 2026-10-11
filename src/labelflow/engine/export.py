@@ -11,6 +11,11 @@ label, a list of label ids, a list of roles) are given as canonical JSON text.
   per upstream labeler, so the actual sampling rates can be checked.
 
 Stages removed by an edit keep their rows: their history stays visible.
+
+Excluded items keep their rows too. The items export marks them ``excluded`` (keeping an
+earlier final label as history), while their labels, scores and arrivals stay in the labels
+export and both reports: they happened, and they say how labelers did and how sampling went,
+whatever later became of the item. Filter on the items export's ``status`` to leave them out.
 """
 
 from __future__ import annotations
@@ -19,7 +24,13 @@ from collections import defaultdict
 from typing import Any
 
 from labelflow.engine.events import canonical_json
-from labelflow.engine.queries import active_config, labels_of, stages_ever, workflow_row
+from labelflow.engine.queries import (
+    active_config,
+    export_status,
+    labels_of,
+    stages_ever,
+    workflow_row,
+)
 from labelflow.engine.tables import Tables
 
 ExportRow = dict[str, Any]
@@ -32,7 +43,11 @@ def _json(value: Any) -> str | None:
 def export_items(tables: Tables, workflow: str) -> list[ExportRow]:
     """One row per item that entered the workflow, in the order they entered.
 
-    ``status`` is in_progress, final, unresolved, none or excluded.
+    ``status`` is in_progress, final, unresolved, none or excluded. ``final_status`` and the
+    columns after it describe the item's final-label record, if it has one. An item excluded
+    after it was finalized has status ``excluded`` and keeps that record in these columns
+    (``final_status`` says what it was), so only rows with status ``final`` are final labels
+    to use.
     """
     dataset = workflow_row(tables, workflow)["dataset"]
     rows = []
@@ -48,7 +63,8 @@ def export_items(tables: Tables, workflow: str) -> list[ExportRow]:
                 "item": entry["item"],
                 "uri": item["uri"],
                 "content_hash": item["content_hash"],
-                "status": final.get("status", entry["status"]),
+                "status": export_status(tables, workflow, entry["item"]),
+                "final_status": final.get("status"),
                 "final_label": _json(final.get("value")),
                 "source_stage": final.get("source_stage"),
                 "label_ids": _json(final.get("label_ids")),

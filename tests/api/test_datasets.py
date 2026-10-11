@@ -142,11 +142,13 @@ def test_a_link_out_of_the_media_folder_is_refused(admin, project, media, tmp_pa
     assert "outside the server's media folder" in response.json()["problems"][0]
 
 
-def test_without_a_media_folder_a_relative_path_cannot_be_hashed(settings, label_tasks, tmp_path):
+def test_without_a_media_folder_a_relative_path_cannot_be_hashed(
+    settings, label_tasks, tmp_path, password
+):
     app = create_app(replace(settings, media_root=None), label_tasks=label_tasks)
     with TestClient(app) as client:
-        client.app.state.runtime.accounts.create("root", "correct horse battery", is_admin=True)
-        token = client.app.state.runtime.identity.login("root", "correct horse battery").token
+        client.app.state.runtime.accounts.create("root", password, is_admin=True)
+        token = client.app.state.runtime.identity.login("root", password).token
         headers = {"Authorization": f"Bearer {token}"}
         client.post("/projects", json={"name": "xray"}, headers=headers)
         client.post("/projects/xray/datasets", json={"name": "d"}, headers=headers)

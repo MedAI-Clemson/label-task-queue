@@ -4,7 +4,10 @@ The trace is every logged event about the item in the workflow, in order, each w
 ``because``. It also marks each config version activated while the item was in the workflow,
 since decisions after that point follow the new version. When the item is still in progress,
 each of its open or claimed slots gets a plain-language reason, built from the same
-eligibility rules ``request_work`` uses.
+eligibility rules and pause state ``request_work`` uses.
+
+An item excluded after it was finalized shows both: its final label (kept as history) and,
+later in the trace, the exclusion.
 """
 
 from __future__ import annotations
@@ -15,11 +18,12 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict
 
 from labelflow.engine import events as ev
-from labelflow.engine.eligibility import Person, load_person, why_not
+from labelflow.engine.eligibility import Person, load_person, offered_last, why_not
 from labelflow.engine.events import Event, canonical_json
 from labelflow.engine.queries import (
     active_config,
     and_list,
+    blocking_pauses,
     export_status,
     holders,
     item_row,
@@ -71,6 +75,7 @@ class Explanation(_View):
     status: str
     """in_progress, final, unresolved, none or excluded."""
     final: FinalLabel | None
+    """The final-label record; an item excluded after it was finalized keeps it."""
     trace: tuple[TraceEntry, ...]
     waiting: tuple[WaitingSlot, ...]
 
@@ -86,6 +91,8 @@ class Explanation(_View):
                 "unresolved": "unresolved: the labels disagreed",
                 "none": "no final label",
             }[self.final.status]
+            if self.status == "excluded":
+                what = f"before it was excluded: {what}"
             lines.append(f"  {what}  (config v{self.final.config_version})")
             lines.append(f"  rule: {self.final.rule}")
         lines.append("")
@@ -210,7 +217,11 @@ def _waiting(tables: Tables, workflow: str, item: str) -> list[WaitingSlot]:
             reason = f"{name} is claimed by {slot['claimed_by']} since {since}"
         else:
             roles = config.stage(slot["stage"]).roles if slot["stage"] in config.stage_names else ()
-            reason = f"{name} is open; " + _why_open(tables, workflow, slot, roles)
+            pauses = blocking_pauses(tables, workflow, slot["stage"])
+            if pauses:
+                reason = f"{name} is open; it waits because " + " and ".join(pauses)
+            else:
+                reason = f"{name} is open; " + _why_open(tables, workflow, slot, roles)
         result.append(
             WaitingSlot(
                 slot=slot["slot"],
@@ -231,7 +242,7 @@ def _why_open(tables: Tables, workflow: str, slot: Row, roles: tuple[str, ...]) 
         person = load_person(tables, workflow, reserved)
         reason = why_not(person, slot, roles)
         if reason is None:
-            return f"it is reserved for {reserved}; {_ready(person)}"
+            return f"it is reserved for {reserved}; {_ready(person, slot)}"
         return f"it is reserved for {reserved}, so nobody can claim it: {reason}"
     people = holders(tables, roles)
     if not people:
@@ -241,7 +252,7 @@ def _why_open(tables: Tables, workflow: str, slot: Row, roles: tuple[str, ...]) 
         person = load_person(tables, workflow, user)
         reason = why_not(person, slot, roles)
         if reason is None:
-            ready.append(_ready(person))
+            ready.append(_ready(person, slot))
         else:
             blocked.append(reason)
     held = f"role {role_text} is held by {and_list(people)}"
@@ -255,15 +266,22 @@ def _why_open(tables: Tables, workflow: str, slot: Row, roles: tuple[str, ...]) 
     return f"{held}; nobody can claim it: " + "; ".join(blocked)
 
 
-def _ready(person: Person) -> str:
+def _ready(person: Person, slot: Row) -> str:
     """What an eligible person is doing instead of claiming the slot."""
+    user = person.user
+    if offered_last(person, slot):
+        text = f"{user} released it before; it is offered to {user} only after their other work"
+    else:
+        text = f"{user} can claim it"
     if person.claims:
         claim = next(iter(person.claims.values()))
-        return (
-            f"{person.user} can claim it but is working on slot {claim['slot']} "
-            f"(item {claim['item']}, {claim['stage']}) first"
-        )
-    return f"{person.user} can claim it and has not asked for work yet"
+        working = f"is working on slot {claim['slot']} (item {claim['item']}, {claim['stage']})"
+        if offered_last(person, slot):
+            return f"{text}, and {working} now"
+        return f"{text} but {working} first"
+    if offered_last(person, slot):
+        return text
+    return f"{text} and has not asked for work yet"
 
 
 # --- one line per event --------------------------------------------------------------------
@@ -307,7 +325,7 @@ def _summary(e: Event) -> str:
             return f"{e.stage} with {len(e.label_ids)} label(s) -> {', '.join(e.outputs)}"
         case ev.ItemExcluded():
             ids = and_list(str(i) for i in e.cancelled_slots) or "none"
-            return f"from {e.workflow}; slots cancelled: {ids}"
+            return f"from {e.workflow} ({e.reason}); slots cancelled: {ids}"
         case ev.SlotsCancelled():
             return f"slot(s) {and_list(str(i) for i in e.slots)} of {e.stage}"
         case ev.ItemFinalized(status="final"):

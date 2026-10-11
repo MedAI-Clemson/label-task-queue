@@ -1,0 +1,12 @@
+The config has 3 errors. Fix them and check again.
+
+Errors:
+  1. stage 'annotate', key 'sample'
+     sample must be more than 0 and at most 1; got 1.5. sample is a fraction, not a
+     percentage: write 0.2 for 20%.
+  2. stage 'expert_review', key 'sample'
+     sample must be more than 0 and at most 1; got 0. A stage that admits no items does
+     nothing; remove the stage instead.
+  3. stage 'audit', key 'sample'
+     sample must be more than 0 and at most 1; got 20. sample is a fraction, not a
+     percentage: write 0.2 for 20%.

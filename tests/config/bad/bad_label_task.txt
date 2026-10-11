@@ -1,0 +1,6 @@
+The config has 1 error. Fix it and check again.
+
+Errors:
+  1. top level, key 'label_task'
+     'image_ontology' has no version. Write the label task as name@version, with a
+     whole-number version, for example image_ontology@1.

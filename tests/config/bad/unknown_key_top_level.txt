@@ -1,0 +1,5 @@
+The config has 1 error. Fix it and check again.
+
+Errors:
+  1. top level, key 'datset'
+     'datset' is not a known key. Did you mean 'dataset'?

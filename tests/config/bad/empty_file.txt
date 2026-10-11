@@ -1,0 +1,6 @@
+The config has 1 error. Fix it and check again.
+
+Errors:
+  1. top level
+     The file is empty. A workflow config needs `workflow`, `dataset`, `label_task` and
+     `stages`.

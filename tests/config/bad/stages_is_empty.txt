@@ -1,0 +1,5 @@
+The config has 1 error. Fix it and check again.
+
+Errors:
+  1. top level, key 'stages'
+     `stages` is empty. A workflow needs at least one stage.

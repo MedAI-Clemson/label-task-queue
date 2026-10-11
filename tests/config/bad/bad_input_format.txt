@@ -1,0 +1,11 @@
+The config has 2 errors. Fix them and check again.
+
+Errors:
+  1. stage 'adjudicate', key 'input'
+     'annotate.disagree' is not a valid input: 'disagree' is not an output. Did you mean
+     'annotate.disagreed'?
+  2. stage 'audit', key 'input'
+     `input` must be a single stage name: a stage takes its items from one place, not from a
+     list. An input is the name of an earlier stage, optionally followed by .agreed or
+     .disagreed, for example 'annotate' or 'annotate.disagreed'. To take every item of the
+     dataset, leave `input` out.

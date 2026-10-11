@@ -1,6 +1,6 @@
 # label-task-queue: Phase 1 Design Notes
 
-Oct 10, 2026 · Hudson Smith · revision 2
+Oct 11, 2026 · Hudson Smith · revision 3
 
 ## Status of this note
 
@@ -9,6 +9,18 @@ This is a draft for review, not a final spec. It records what was settled in des
 Each statement is marked as one of two kinds. **Decided** means Hudson has stated or confirmed it. **Proposed** means it is a suggestion that still needs a yes or no. Questions not yet discussed are collected in the last section.
 
 On naming: what a researcher writes is called a **labeling workflow**, not a router. The program that runs it is called the engine internally; users never need that name. The repository name is unchanged for now.
+
+**What changed in revision 3.** Decisions from the review of the first implementation
+(details in [`phase1-implementation-notes.md`](phase1-implementation-notes.md)):
+
+- The proposed output names, `final` defaults, default work order, edit rules and the name
+  `show_prior` are confirmed. The package is named `labelflow`.
+- The interface has two mask tools, brush and polygon, both producing the same per-class mask. The agreed label for masks stays a copy of the earliest label.
+- A labeler picks which workflow to work on.
+- Admins can pause and resume a stage or a whole workflow.
+- An item that already has its final label can still be excluded; the final label stays in
+  the log as history.
+- A labeler who releases an item is offered it again only after their other work.
 
 **What changed in revision 2.** These changes were all agreed in review.
 
@@ -94,7 +106,7 @@ Items are the only thing that moves through a workflow (decided). A **stage** is
 - hold one of the stage's roles at the moment of the claim, and
 - not have labeled this item already **anywhere in this workflow**. This prevents self-review. If no eligible person exists, the slot waits, and `explain(item)` says why.
 
-**Default order (proposed).** Slots in later stages are offered first, so items finish. Within a stage, the oldest admitted item comes first. Phase 1 has no other ordering.
+**Default order (decided).** Slots in later stages are offered first, so items finish. Within a stage, the oldest admitted item comes first. Phase 1 has no other ordering.
 
 **Task actions (decided):**
 
@@ -103,8 +115,19 @@ Items are the only thing that moves through a workflow (decided). A **stage** is
 | Labeler | Claim, submit, release with a reason |
 | Admin | Exclude an item, for example an image that cannot be labeled |
 | Admin | Cancel the open slots in a stage |
+| Admin | Pause or resume a stage, or a whole workflow |
 
 Every action is a logged event. Automatic expiry of claims is deferred.
+
+**Pausing (decided).** A pause stops claims only. No new work is handed out in a paused stage
+or workflow, but items keep arriving and their slots wait, and claims already held can still
+be submitted or released. A stage's pause and its workflow's pause are independent.
+
+**Releasing (decided).** A person who releases an item is offered it again in that stage only
+after every other slot they are eligible for.
+
+**Excluding (decided).** Exclusion is per workflow. It is allowed even after the item's final
+label exists; the final label then stays in the log as history, and the item shows as excluded.
 
 **One image's path:**
 
@@ -169,7 +192,7 @@ The settings combine freely. For example, "an expert reviews 20% of images, and 
 
 **`score_against: <property>` (decided)** compares each label with a key stored on the item, such as a gold-standard answer. The comparison is the label task's consensus check, run on the label and the key. It changes no routing. A labeler's score is the fraction of their items that agreed with the key (proposed).
 
-**`show_prior` (proposed name)** controls what a reviewer starts from (decided). By default, a reviewer sees earlier labels as layers they can toggle, with the agreed and disputed parts flagged. Starting from earlier work nudges reviewers toward accepting it, so the setting is visible in the config and a stage can opt into blind review (`show_prior: false`).
+**`show_prior`** controls what a reviewer starts from (decided). By default, a reviewer sees earlier labels as layers they can toggle, with the agreed and disputed parts flagged. Starting from earlier work nudges reviewers toward accepting it, so the setting is visible in the config and a stage can opt into blind review (`show_prior: false`).
 
 **When a stage's roles are too small (proposed).** If `labels_per_item` exceeds the number of people currently holding the stage's roles, validation warns when the workflow starts and again on each role change.
 
@@ -201,7 +224,7 @@ Escalation is not a built-in feature (decided). It is made of ordinary stages:
 - A stage's input can be the whole output of an earlier stage, or only the items that agreed or that disagreed.
 - The config holds no numbers and no conditions for this split.
 
-**Output names (proposed):**
+**Output names (decided):**
 
 | Input | Contains |
 | --- | --- |
@@ -241,11 +264,11 @@ Every workflow ends in an explicit final step: an ordered list of stages (decide
 
 **Validation (proposed).** Every stage must either be listed in `final` or pass all of its output downstream, through a stage that takes its whole output without sampling, or through stages taking both its agreed and disagreed items. This makes it impossible for an item to finish with no final label. For example, a stage that only *samples* from `annotate` does not pass all of it downstream, so `annotate` must be listed.
 
-**Defaults (proposed).** If `final` is omitted, it means every stage, last-listed first, and the resolved config shows it spelled out. A workflow that should produce no final labels, such as a training round, declares `final: none`.
+**Defaults (decided).** If `final` is omitted, it means every stage, last-listed first, and the resolved config shows it spelled out. A workflow that should produce no final labels, such as a training round, declares `final: none`.
 
 ## Changing a running workflow
 
-Projects change course, so a running workflow can be edited, but only **forward-only** (decided in principle; details proposed).
+Projects change course, so a running workflow can be edited, but only **forward-only** (decided).
 
 - **Every edit is a new config version.** An admin proposes it and sees a change preview: the diff, plus counts of the open slots, items in progress and finished items it affects. Activating it is a logged event that carries the diff.
 - **A new version governs only decisions made after it is activated.** Admissions, slots, labels and final labels that already exist stay as they are, and each keeps the version it was made under.
@@ -349,7 +372,7 @@ Role changes, workflow version activations and admin actions are events in the s
 Phase 1 builds a minimal annotation interface rather than plugging into an existing tool (decided). Scope (decided):
 
 - 2D images only.
-- Classifications, plus **one** mask tool: brush or polygon, to be chosen. It is built on an open-source drawing library.
+- Classifications, plus two mask tools (decided): a brush (paint and erase, for irregular regions) and a polygon (click the outline, for crisp boundaries). Both edit the same one-mask-per-class label, so a labeler can outline with the polygon and touch up with the brush. Built on an open-source drawing library.
 - For reviewers: earlier labels as toggleable layers, plus the per-field agree/disagree flags.
 - Reporting exactly what was shown, as references, for the event log.
 
@@ -386,7 +409,7 @@ The order follows the design's priorities: the pure engine and provenance first,
 | # | Milestone | Contents | Exit criteria |
 | --- | --- | --- | --- |
 | 0 | **Scaffold** | Tag the prototype (`v0-prototype`), then remove it. New package layout: `engine/`, `labeltask/`, `store/`, `api/`, `ui/`. A `pyproject.toml` with pinned dependencies, ruff, pytest, and CI on GitHub Actions. | CI is green on an empty skeleton. |
-| 0b | **Interface spike** (in parallel, 1–2 days) | Try 2–3 open-source drawing libraries for brush or polygon masks plus RLE export. Pick one and choose brush or polygon. | A decision note with a working prototype page. |
+| 0b | **Interface spike** (in parallel, 1–2 days) | Try 2–3 open-source drawing libraries for brush and polygon masks, editing one mask per class, plus RLE export. Pick one. | A decision note with a working prototype page. |
 | 1 | **Config** | Pydantic models for the config; JSON Schema export; the validation rules (inputs refer to earlier stages; output names; the final step's coverage rule; warnings when roles are too small); the resolved view; a Mermaid diagram. | Example configs validate. Each bad config gives a plain-language error, checked by snapshot tests. The schema is published. |
 | 2 | **Engine core** | Events and state changes: import, admission (hashed draws), slots, claim (eligibility, order), submit, release, exclude, cancel slots, consensus, finalize, role events. An in-memory store and `explain(item)`. A stand-in label task. | Property tests (using Hypothesis): rebuilding state from the log equals the state built step by step; draws are deterministic and rise with the fraction; nobody labels an item twice in a workflow; no slot is ever claimed twice. Simulated-labeler tests run both example workflows to completion. |
 | 3 | **Built-in label task** | The ontology file format, validation, the consensus check (exact match, IoU), the agreed label, the per-field flags, scoring against a key, the RLE mask encoding, versioning. | Unit tests with handmade masks, including the edge cases (empty masks, a missing class). |
@@ -431,10 +454,10 @@ The order follows the design's priorities: the pure engine and provenance first,
 
 ## Open questions before implementation
 
-- [ ] **Proposed items.** Statements marked proposed still need a yes or no. In particular: the output names `.agreed` and `.disagreed`, the `final` defaults and `final: none`, the default work order, and the details of what can be edited in place.
-- [ ] **Remaining names.** `show_prior`, and the engine's internal and package name.
-- [ ] **Mask tool.** Brush or polygon, decided by the spike in milestone 0b.
-- [ ] **Agreed label for masks.** Is a copy of the earliest label acceptable for the anchor project, or does it need a merge sooner?
-- [ ] **Choosing between workflows.** When a labeler is eligible in several workflows, do they pick one in the interface, or does the system pick?
+- [x] **Proposed items.** The output names `.agreed` and `.disagreed`, the `final` defaults and `final: none`, the default work order, and the details of what can be edited in place are confirmed. Other statements still marked proposed need a yes or no.
+- [x] **Remaining names.** `show_prior` stays; the package is `labelflow`.
+- [x] **Mask tool.** Both brush and polygon. The spike in milestone 0b chooses a drawing library that supports both.
+- [x] **Agreed label for masks.** A copy of the earliest label is acceptable for the anchor project.
+- [x] **Choosing between workflows.** The labeler picks one in the interface.
 
 Outside this note, the briefing's research steps are still to do: a catalog of 10 to 15 real past routing policies, short interviews with former collaborators, and a proper literature check.

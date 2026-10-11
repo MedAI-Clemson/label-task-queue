@@ -1,0 +1,20 @@
+The config has 5 errors. Fix them and check again.
+
+Errors:
+  1. stage 'annotate', key 'name'
+     Stage names must be unique, but 'annotate' is used by stages 2 and 4. Rename all but
+     one of them.
+  2. stage 'review', key 'input'
+     Stage 'review' takes its items from 'annotate', but 'annotate' is listed after
+     'review'. Stages are listed in order, and an input must be a stage listed earlier. Move
+     'annotate' above 'review'.
+  3. stage 'adjudicate', key 'input'
+     Stage 'adjudicate' takes 'annotate.disagreed', but 'annotate' labels each item only
+     once (labels_per_item is 1), so no item can agree or disagree and this input would
+     always be empty. Set `labels_per_item` to 2 or more on 'annotate', or take its whole
+     output with `input: annotate`.
+  4. top level, key 'final'
+     `final` lists 'review' more than once. List each stage once.
+  5. top level, key 'final'
+     `final` lists 'nothing', but there is no stage with that name. The stages are 'review',
+     'annotate' and 'adjudicate'.

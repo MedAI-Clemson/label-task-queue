@@ -1,0 +1,6 @@
+The config has 1 error. Fix it and check again.
+
+Errors:
+  1. top level
+     The config must be a group of keys (`workflow`, `dataset`, `label_task`, `stages`,
+     `final`), but the file holds a list.

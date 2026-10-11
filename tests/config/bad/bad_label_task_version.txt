@@ -1,0 +1,6 @@
+The config has 1 error. Fix it and check again.
+
+Errors:
+  1. top level, key 'label_task'
+     'image_ontology@v1' has an invalid version. After the @ there must be a whole number
+     such as 1; got 'v1'.

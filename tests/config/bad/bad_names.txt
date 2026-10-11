@@ -1,0 +1,18 @@
+The config has 5 errors. Fix them and check again.
+
+Errors:
+  1. top level, key 'workflow'
+     'xray main' is not a valid workflow name. A name starts with a letter and uses only
+     letters, digits and underscores. Try 'xray_main'.
+  2. stage 1, key 'name'
+     'expert review' is not a valid stage name. A name starts with a letter and uses only
+     letters, digits and underscores. Try 'expert_review'.
+  3. stage 1, key 'assign_to'
+     'Expert-Role' is not a valid role name. A name starts with a letter and uses only
+     letters, digits and underscores. Try 'Expert_Role'.
+  4. stage 'second', key 'assign_to'
+     '3rd_party' is not a valid role name. A name starts with a letter and uses only
+     letters, digits and underscores.
+  5. stage 'second', key 'score_against'
+     'gold key' is not a valid property name. A name starts with a letter and uses only
+     letters, digits and underscores. Try 'gold_key'.

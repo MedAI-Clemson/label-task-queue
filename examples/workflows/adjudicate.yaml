@@ -1,0 +1,25 @@
+# Two annotators read every image; an expert settles only the images they disagreed on.
+#
+# Escalation is not a feature of its own: it is a stage whose input is the '.disagreed'
+# output of an earlier stage. Whether two labels agree is decided by the label task
+# (here, the ontology's consensus rule: classifications must match exactly, and masks must
+# overlap at or above the class IoU threshold). The config holds no numbers for this.
+
+workflow: xray_adjudicated
+dataset: xray_batch_1
+label_task: image_ontology@1
+
+stages:
+  - name: annotate
+    assign_to: annotator
+    labels_per_item: 2            # two slots per image, for two different people:
+                                  # nobody labels the same image twice in a workflow
+
+  - name: adjudicate
+    input: annotate.disagreed     # only the images whose two labels did not agree
+    assign_to: expert             # (annotate.agreed would be the other half)
+                                  # the expert sees both labels, with the disputed parts flagged
+
+final: [adjudicate, annotate]     # a disputed image finalizes from the expert's label; an image
+                                  # whose annotators agreed finalizes from 'annotate' with the
+                                  # agreed label (a copy of the earlier of the two)

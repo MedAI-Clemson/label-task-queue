@@ -1,0 +1,23 @@
+# The resolved config of workflow 'xray_spot_checked': every default is filled in.
+workflow: xray_spot_checked
+dataset: xray_batch_1
+label_task: image_ontology@1
+
+stages:
+  - name: annotate
+    input: null                     # every item of the dataset 'xray_batch_1'
+    assign_to: [annotator]
+    sample: 1.0                     # every arriving item enters
+    labels_per_item: {count: 3, fraction: 0.2}  # 20% of items get 3 labels, the rest get 1
+    score_against: null             # labels are not scored against a key
+    show_prior: true                # labelers see earlier labels
+
+  - name: adjudicate
+    input: annotate.disagreed       # items of 'annotate' whose labels disagreed
+    assign_to: [expert]
+    sample: 1.0                     # every arriving item enters
+    labels_per_item: 1              # each item is labeled once
+    score_against: null             # labels are not scored against a key
+    show_prior: true                # labelers see earlier labels
+
+final: [adjudicate, annotate]       # the first listed stage that labeled an item gives its label

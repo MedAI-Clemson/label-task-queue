@@ -1,0 +1,15 @@
+flowchart TD
+    dataset(["Dataset: batch_1"])
+    stage1["screen<br/>roles: student, annotator<br/>2 labels per item<br/>blind"]
+    stage2["confirm<br/>role: expert<br/>1 label per item<br/>scored against gold_key"]
+    stage3["adjudicate<br/>role: expert<br/>1 label per item"]
+    stage4["audit<br/>roles: expert, lead<br/>2 labels for 30% of items, else 1"]
+    final(["Final label"])
+    dataset -->|"50% sample"| stage1
+    stage1 -->|"agreed, 10% sample"| stage2
+    stage1 -->|"disagreed"| stage3
+    stage3 --> stage4
+    stage4 -->|"1st"| final
+    stage3 -->|"2nd"| final
+    stage2 -->|"3rd"| final
+    stage1 -->|"4th"| final

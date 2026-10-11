@@ -1,0 +1,42 @@
+# An ontology for labeling chest X-rays. It defines the built-in label task that a
+# workflow refers to as 'image_ontology@1' (name@version): what a label must contain,
+# how a submitted label is checked, and when two labels count as agreeing.
+#
+# The server loads every *.yaml file in the folder named by LABELFLOW_LABEL_TASKS.
+#
+# If you change anything below, change the version too. Every label records the ontology
+# version plus a fingerprint of this file's content, so an edited file whose version was
+# not bumped is still detectable, but the labels made under it would not be comparable.
+
+name: image_ontology
+version: 1
+
+# Classifications: one value per name, chosen from the list. A label that gives an unknown
+# name or value is refused with a plain-language message. Two labels agree on a
+# classification when the values match exactly.
+classifications:
+  - name: view
+    values: [PA, AP, lateral]
+    required: true                # a label without 'view' is refused
+  - name: quality
+    values: [good, poor]
+    required: false               # may be left out
+
+# Masks: one binary mask per class (semantic segmentation), stored as a COCO run-length
+# encoding. Every class must be present in every label; an empty mask means "nothing
+# there", which is deliberately different from forgetting to draw.
+#
+# The threshold is the IoU (intersection over union, 0 to 1) at or above which two
+# labelers' masks for the class count as agreeing. Two empty masks always agree. Set it
+# lower for small or fuzzy structures, higher for large, well-defined ones.
+masks:
+  - name: lung
+    threshold: 0.8
+  - name: effusion
+    threshold: 0.5
+
+# A label for this ontology looks like this (masks are RLEs; see labelflow.labeltask.rle):
+#
+#   {"classifications": {"view": "PA", "quality": "good"},
+#    "masks": {"lung":     {"size": [512, 512], "counts": "..."},
+#              "effusion": {"size": [512, 512], "counts": [262144]}}}   # an empty mask

@@ -1,0 +1,6 @@
+The config has 1 error. Fix it and check again.
+
+Errors:
+  1. top level, key 'final'
+     `final` is an empty list, so no item would get a final label. List at least one stage,
+     or write `final: none` if this workflow should not produce final labels.

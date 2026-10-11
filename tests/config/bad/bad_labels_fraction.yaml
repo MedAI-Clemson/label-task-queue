@@ -1,0 +1,18 @@
+workflow: xray_main
+dataset: xray_batch_1
+label_task: image_ontology@1
+
+stages:
+  - name: first
+    assign_to: annotator
+    labels_per_item: {count: 3, fractoin: 0.2}
+
+  - name: second
+    assign_to: annotator
+    labels_per_item: {count: 1, fraction: 1.5}
+
+  - name: third
+    assign_to: annotator
+    labels_per_item: {count: 3}
+
+final: [first, second, third]

@@ -1,0 +1,7 @@
+flowchart TD
+    dataset(["Dataset: gold_set_1"])
+    stage1["gold_read<br/>role: trainee<br/>every role holder labels each item<br/>scored against gold_key"]
+    final["no final labels"]
+    dataset --> stage1
+    classDef note stroke-dasharray: 4 4
+    class final note

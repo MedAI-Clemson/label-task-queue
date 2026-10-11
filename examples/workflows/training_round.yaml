@@ -1,0 +1,22 @@
+# A training round: every trainee labels every gold-standard image, and each label is
+# scored against the expert's answer stored on the image.
+#
+# Nothing here is a training feature. 'trainee' is just a role the project defined, and
+# the gold answer is an item property that the stage reads through 'score_against'.
+# Trainees never see the key. When they are ready, an admin grants them the 'annotator'
+# role (a logged change), which is what makes them eligible for the main workflow.
+
+workflow: training_round_1
+dataset: gold_set_1               # each image was imported with a 'gold_key' property
+label_task: image_ontology@1
+
+stages:
+  - name: gold_read
+    assign_to: trainee
+    labels_per_item: all          # everyone holding 'trainee' when the image is admitted;
+                                  # the list is logged, so a later recruit adds no work here
+    score_against: gold_key       # compare each label with the item's 'gold_key' using the
+                                  # same consensus rule; changes no routing. The score report
+                                  # gives each trainee's fraction of agreeing labels.
+
+final: none                       # training produces scores, not final labels

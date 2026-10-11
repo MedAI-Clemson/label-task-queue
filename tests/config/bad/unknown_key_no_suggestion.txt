@@ -1,0 +1,6 @@
+The config has 1 error. Fix it and check again.
+
+Errors:
+  1. stage 'annotate', key 'color'
+     'color' is not a known key. The keys allowed in a stage are: name, input, assign_to,
+     sample, labels_per_item, score_against, show_prior.

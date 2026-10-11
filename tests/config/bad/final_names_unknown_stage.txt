@@ -1,0 +1,9 @@
+The config has 2 errors. Fix them and check again.
+
+Errors:
+  1. top level, key 'final'
+     `final` lists 'anotate', but there is no stage with that name. Did you mean 'annotate'?
+     The stages are 'annotate'.
+  2. top level, key 'final'
+     `final` lists 'review', but there is no stage with that name. The stages are
+     'annotate'.

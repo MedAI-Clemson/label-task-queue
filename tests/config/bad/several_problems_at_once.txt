@@ -1,0 +1,36 @@
+The config has 11 errors. Fix them and check again.
+
+Errors:
+  1. top level, key 'workflow'
+      'xray main' is not a valid workflow name. A name starts with a letter and uses only
+      letters, digits and underscores. Try 'xray_main'.
+  2. top level, key 'label_task'
+      'image_ontology' has no version. Write the label task as name@version, with a
+      whole-number version, for example image_ontology@1.
+  3. stage 'annotate', key 'labels_per_item'
+      labels_per_item cannot be 0. It can be a whole number of 1 or more, such as 2 (each
+      item gets that many labels); `all` (every person holding the stage's roles labels each
+      item); or `{count: 3, fraction: 0.2}` (20% of items get 3 labels, the rest get 1).
+  4. stage 'adjudicate', key 'assign_to'
+      '' is not a valid role name. A name starts with a letter and uses only letters, digits
+      and underscores.
+  5. stage 'adjudicate', key 'smaple'
+      'smaple' is not a known key. Did you mean 'sample'?
+  6. stage 'audit', key 'assign_to'
+      The required key 'assign_to' is missing. Name the role (or list of roles) whose
+      holders label this stage, for example `assign_to: annotator`.
+  7. top level, key 'colour'
+      'colour' is not a known key. The keys allowed at the top level are: workflow, dataset,
+      label_task, stages, final.
+  8. stage 'audit', key 'name'
+      Stage names must be unique, but 'audit' is used by stages 3 and 4. Rename all but one
+      of them.
+  9. stage 'audit', key 'input'
+      Stage 'audit' takes its items from 'anotate', but no stage listed before it has that
+      name. Did you mean 'annotate'? The stages listed before it are 'annotate',
+      'adjudicate' and 'audit'.
+  10. top level, key 'final'
+      `final` lists 'review', but there is no stage with that name. The stages are
+      'annotate', 'adjudicate' and 'audit'.
+  11. top level, key 'final'
+      `final` lists 'adjudicate' more than once. List each stage once.

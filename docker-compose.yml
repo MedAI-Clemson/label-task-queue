@@ -5,5 +5,19 @@ services:
       - "8000:8000"
     volumes:
       - ./db:/db:rw
+      # The ontology files (the label tasks). The image has the examples built in.
+      - ./examples/ontologies:/ontologies:ro
+      # To let the server hash images when items are imported, mount them and set
+      # LABELFLOW_MEDIA_ROOT below:
+      # - /path/to/images:/media:ro
     environment:
-      - DATABASE_URI=sqlite:////db/database.db
+      - DATABASE_URI=sqlite:////db/labelflow.db
+      - LABELFLOW_LABEL_TASKS=/ontologies
+      # - LABELFLOW_MEDIA_ROOT=/media
+      # - LABELFLOW_SESSION_HOURS=12
+      # - LABELFLOW_COOKIE_SECURE=true   # when the service is reached over https
+
+# The container runs `alembic upgrade head` each time it starts. To make the first
+# administrator account (once):
+#   docker compose run --rm app sh -c \
+#     "alembic upgrade head && python -m labelflow.api.admin create-admin <username>"

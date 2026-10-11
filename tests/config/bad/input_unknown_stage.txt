@@ -1,0 +1,9 @@
+The config has 2 errors. Fix them and check again.
+
+Errors:
+  1. stage 'expert_review', key 'input'
+     Stage 'expert_review' takes its items from 'anotate', but no stage listed before it has
+     that name. Did you mean 'annotate'? The stages listed before it are 'annotate'.
+  2. stage 'audit', key 'input'
+     Stage 'audit' takes its items from 'nothing_like_it', but no stage listed before it has
+     that name. The stages listed before it are 'annotate' and 'expert_review'.

@@ -1,0 +1,24 @@
+workflow: xray main
+dataset: xray_batch_1
+label_task: image_ontology
+colour: red
+
+stages:
+  - name: annotate
+    assign_to: annotator
+    labels_per_item: 0
+
+  - name: adjudicate
+    input: annotate.disagreed
+    assign_to: [expert, ""]
+    smaple: 2
+
+  - name: audit
+    input: adjudicate
+    sample: 0.1
+
+  - name: audit
+    input: anotate
+    assign_to: expert
+
+final: [adjudicate, review, adjudicate]

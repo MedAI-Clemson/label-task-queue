@@ -1,0 +1,7 @@
+The config has 1 error. Fix it and check again.
+
+Errors:
+  1. stage 'annotate'
+     Stage 'annotate' is not listed in `final`, and not all of its items go on to a later
+     stage (adjudicate takes only a 50% sample of 'annotate.disagreed'), so some items would
+     finish with no final label. Add 'annotate' to `final`.

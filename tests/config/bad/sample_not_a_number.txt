@@ -1,0 +1,8 @@
+The config has 2 errors. Fix them and check again.
+
+Errors:
+  1. stage 'annotate', key 'sample'
+     sample must be a number between 0 and 1 (for example 0.2 for 20% of items); got 'lots'.
+  2. stage 'expert_review', key 'sample'
+     sample must be a number between 0 and 1 (for example 0.2 for 20% of items); got '20%'.
+     Write 20% as 0.2.

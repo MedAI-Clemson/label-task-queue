@@ -1,0 +1,28 @@
+# Uses every feature the diagram shows.
+workflow: complex_demo
+dataset: batch_1
+label_task: image_ontology@1
+
+stages:
+  - name: screen
+    assign_to: [student, annotator]
+    sample: 0.5
+    labels_per_item: 2
+    show_prior: false
+
+  - name: confirm
+    input: screen.agreed
+    assign_to: expert
+    sample: 0.1
+    score_against: gold_key
+
+  - name: adjudicate
+    input: screen.disagreed
+    assign_to: expert
+
+  - name: audit
+    input: adjudicate
+    assign_to: [expert, lead]
+    labels_per_item: {count: 2, fraction: 0.3}
+
+final: [audit, adjudicate, confirm, screen]

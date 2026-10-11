@@ -1,0 +1,24 @@
+# Annotators label every image once; an expert reviews a random 20% of them.
+#
+# The most common shape of a labeling project. The sample is drawn per image by a hash
+# of (workflow seed, stage, image), so it is reproducible and nobody can steer it, and the
+# sampling report shows the rate that was actually drawn, overall and per annotator.
+
+workflow: xray_main               # unique in the project; names the event log entries
+dataset: xray_batch_1             # every item of this dataset enters the workflow
+label_task: image_ontology@1      # the ontology file (examples/ontologies/chest_xray.yaml)
+
+stages:
+  - name: annotate
+    assign_to: annotator          # anyone holding the 'annotator' role may claim its slots
+                                  # (no input: takes every item of the dataset;
+                                  #  labels_per_item: 1 is the default, so one slot per image)
+
+  - name: expert_review
+    input: annotate               # takes the images that completed 'annotate'
+    assign_to: expert
+    sample: 0.2                   # ...but admits only 20% of them, by hashed draw;
+                                  # the reviewer sees the annotation (show_prior: true, the default)
+
+final: [expert_review, annotate]  # the first listed stage that labeled an image gives its final
+                                  # label: the review where there is one, else the annotation

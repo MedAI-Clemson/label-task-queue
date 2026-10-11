@@ -26,6 +26,7 @@ from ltq.engine.draws import draw
 from ltq.engine.queries import (
     active_config,
     and_list,
+    config_at,
     holders,
     labels_of,
     live_slots,
@@ -39,17 +40,29 @@ from ltq.labeltask import LabelTaskRegistry, LabelValidationError
 class Flow:
     """The automatic decisions for one workflow, within one command (one transaction).
 
-    The config version in force is read once, when the command starts.
+    Every decision follows one config version: the version in force when the command
+    started, which the command passes in (or, if it does not, the active one). An edit
+    activated later governs only later commands; that is what makes edits forward-only.
     """
 
-    def __init__(self, store: Store, label_tasks: LabelTaskRegistry, workflow: str, at: datetime):
+    def __init__(
+        self,
+        store: Store,
+        label_tasks: LabelTaskRegistry,
+        workflow: str,
+        at: datetime,
+        version: int | None = None,
+    ):
         self.store = store
         self.workflow = workflow
         self.at = at
         row = workflow_row(store, workflow)
         self.seed: int = row["seed"]
         self.dataset: str = row["dataset"]
-        self.version, self.config = active_config(store, workflow)
+        if version is None:
+            self.version, self.config = active_config(store, workflow)
+        else:
+            self.version, self.config = version, config_at(store, workflow, version)
         self.task = label_tasks.get(row["label_task"])
 
     def _emit(self, event_type: type[ev._Event], **fields: Any) -> ev.Event:

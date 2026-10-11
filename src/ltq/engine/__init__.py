@@ -8,14 +8,17 @@ Plain Python; it knows nothing about the web layer or the database. Typical use:
     ...
     slot = engine.request_work("xray_main", "ana")
 
-The config models live in ``ltq.engine.config``.
+A running workflow is edited with ``preview_edit`` and ``activate_edit`` (forward-only; see
+``ltq.engine.edits``). The config models live in ``ltq.engine.config``.
 """
 
 from ltq.engine.draws import draw
+from ltq.engine.edits import Change, ChangePreview, FinalImpact, ItemCounts, StageImpact
 from ltq.engine.engine import Engine, utc_now
 from ltq.engine.errors import (
     AlreadyExists,
     BrokenChain,
+    EditRefused,
     EngineError,
     InvalidLabel,
     InvalidRequest,
@@ -31,6 +34,7 @@ from ltq.engine.errors import (
     UnknownSlot,
     UnknownStage,
     UnknownWorkflow,
+    VersionConflict,
 )
 from ltq.engine.events import (
     Event,
@@ -51,17 +55,22 @@ __all__ = [
     "SCHEMA",
     "AlreadyExists",
     "BrokenChain",
+    "Change",
+    "ChangePreview",
     "ConsensusShown",
+    "EditRefused",
     "Engine",
     "EngineError",
     "Event",
     "Explanation",
+    "FinalImpact",
     "InMemoryStore",
     "InMemoryTables",
     "IntegrityError",
     "InvalidLabel",
     "InvalidRequest",
     "InvalidShown",
+    "ItemCounts",
     "NotAllowed",
     "NotEligible",
     "NotFound",
@@ -69,6 +78,7 @@ __all__ = [
     "Shown",
     "Slot",
     "SlotNotYours",
+    "StageImpact",
     "Store",
     "Table",
     "Tables",
@@ -79,6 +89,7 @@ __all__ = [
     "UnknownSlot",
     "UnknownStage",
     "UnknownWorkflow",
+    "VersionConflict",
     "WorkPacket",
     "apply_event",
     "canonical_json",

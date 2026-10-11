@@ -45,6 +45,23 @@ def active_config(tables: Tables, workflow: str) -> tuple[int, WorkflowConfig]:
     return version, config_at(tables, workflow, version)
 
 
+def stages_ever(tables: Tables, workflow: str) -> list[Stage]:
+    """Every stage the workflow has had: the active version's stages in order, then the
+    stages that edits removed, as last configured.
+
+    Reports use it so that a removed stage's history stays visible.
+    """
+    active, config = active_config(tables, workflow)
+    stages = list(config.stages)
+    seen = set(config.stage_names)
+    for version in range(active - 1, 0, -1):
+        for stage in config_at(tables, workflow, version).stages:
+            if stage.name not in seen:
+                seen.add(stage.name)
+                stages.append(stage)
+    return stages
+
+
 def stage_of(config: WorkflowConfig, stage: str) -> Stage:
     try:
         return config.stage(stage)
@@ -86,6 +103,11 @@ def holders(tables: Tables, roles: Iterable[str]) -> list[str]:
         for r in tables.select("role_assignments", role=role, active=True)
     }
     return sorted(users)
+
+
+def role_holders(tables: Tables) -> dict[str, list[str]]:
+    """Every role defined in the project, with the people holding it now."""
+    return {r["role"]: holders(tables, [r["role"]]) for r in tables.select("roles")}
 
 
 def labels_of(tables: Tables, workflow: str, item: str, stage: str | None = None) -> list[Row]:

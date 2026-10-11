@@ -21,9 +21,11 @@ from pydantic import JsonValue, TypeAdapter, ValidationError
 from ltq.engine import events as ev
 from ltq.engine.config import WorkflowConfig, role_warnings
 from ltq.engine.config.models import NAME_PATTERN
+from ltq.engine.edits import ChangePreview, ConfigSource, prepare_edit
 from ltq.engine.eligibility import Person, load_person, why_not
 from ltq.engine.errors import (
     AlreadyExists,
+    EditRefused,
     InvalidLabel,
     InvalidRequest,
     InvalidShown,
@@ -34,6 +36,7 @@ from ltq.engine.errors import (
     UnknownLabelTaskRef,
     UnknownRole,
     UnknownSlot,
+    VersionConflict,
 )
 from ltq.engine.events import Shown, canonical_json
 from ltq.engine.explain import Explanation, explain
@@ -45,10 +48,10 @@ from ltq.engine.queries import (
     config_at,
     did_you_mean,
     held_roles,
-    holders,
     item_row,
     labels_of,
     next_id,
+    role_holders,
     stage_of,
     workflow_item,
     workflow_row,
@@ -84,8 +87,9 @@ class Engine:
             raise ValueError("The engine clock must return timezone-aware datetimes.")
         return now.astimezone(UTC)
 
-    def _flow(self, workflow: str, at: datetime) -> Flow:
-        return Flow(self.store, self.label_tasks, workflow, at)
+    def _flow(self, workflow: str, at: datetime, version: int | None = None) -> Flow:
+        """The automatic decisions, following ``version`` (the one the command read)."""
+        return Flow(self.store, self.label_tasks, workflow, at, version)
 
     def _my_slot(self, workflow: str, slot_id: int, user: str) -> Row:
         """The slot, if it belongs to the workflow and the person has claimed it."""
@@ -239,8 +243,9 @@ class Engine:
         """
         if not isinstance(config, WorkflowConfig):
             config = WorkflowConfig.model_validate(config)
-        if not isinstance(seed, int) or isinstance(seed, bool):
-            raise InvalidRequest("The seed must be an integer.")
+        if not isinstance(seed, int) or isinstance(seed, bool) or not 0 <= seed < 2**63:
+            # 2**63: the seed is stored in a 64-bit signed integer column
+            raise InvalidRequest("The seed must be a whole number from 0 to 2**63 - 1.")
         with self.store.transaction():
             name = config.workflow
             if self.store.get("workflows", workflow=name) is not None:
@@ -270,7 +275,7 @@ class Engine:
                     label_task=config.label_task,
                     seed=seed,
                     config=data,
-                    config_hash=hashlib.sha256(canonical_json(data).encode()).hexdigest(),
+                    config_hash=_config_hash(data),
                     because=f"started by {actor} with config version 1 and seed {seed}",
                 )
             )
@@ -288,14 +293,90 @@ class Engine:
         """Stages that the people holding their roles cannot fill, in plain language."""
         with self.store.transaction():
             _, config = active_config(self.store, workflow)
-            roles = {
-                r["role"]: holders(self.store, [r["role"]]) for r in self.store.select("roles")
-            }
+            roles = role_holders(self.store)
             return [f"workflow {workflow}, {problem}" for problem in role_warnings(config, roles)]
 
     def _all_staffing_warnings(self) -> list[str]:
         rows = self.store.select("workflows", status="running")
         return [w for row in rows for w in self.staffing_warnings(row["workflow"])]
+
+    # --- editing a running workflow -------------------------------------------------------
+
+    def preview_edit(self, workflow: str, new_config: ConfigSource) -> ChangePreview:
+        """What activating ``new_config`` would change, without changing anything.
+
+        The proposal is a whole config document (a ``WorkflowConfig``, a mapping or YAML
+        text). The preview classifies every change against the active version, lists why
+        the edit would be refused (if it would), and counts what it touches. See ``edits``.
+        """
+        with self.store.transaction():
+            preview, _ = prepare_edit(self.store, workflow, new_config)
+            return preview
+
+    def activate_edit(
+        self,
+        workflow: str,
+        new_config: ConfigSource,
+        actor: str | None,
+        base_version: int,
+        reason: str = "",
+    ) -> list[str]:
+        """Make ``new_config`` the workflow's next config version (a forward-only edit).
+
+        ``base_version`` is the version the change was previewed against: if another edit
+        was activated since, this one is refused (VersionConflict), so nobody activates a
+        change they have not seen the preview of. An edit the preview refuses raises
+        EditRefused with every reason. Otherwise one ``config_activated`` event is logged,
+        carrying the new config, the diff and the preview's counts, and nothing else changes:
+        the new version governs only decisions made from now on.
+
+        Returns staffing warnings for the new version, as ``start_workflow`` does.
+        """
+        if not isinstance(base_version, int) or isinstance(base_version, bool):
+            raise InvalidRequest(
+                "base_version must be the version number the edit was previewed against."
+            )
+        if not isinstance(reason, str):
+            raise InvalidRequest("The reason must be text (it may be empty).")
+        with self.store.transaction():
+            active, _ = active_config(self.store, workflow)
+            if base_version != active:
+                row = self.store.get("workflow_versions", workflow=workflow, version=active)
+                when = datetime.fromisoformat(row["activated_at"]).strftime("%Y-%m-%d %H:%M UTC")
+                raise VersionConflict(
+                    f"Workflow '{workflow}' is at config version {active} (activated by "
+                    f"{row['activated_by']} on {when}), but this edit was previewed against "
+                    f"version {base_version}. Preview it again against version {active}, then "
+                    "activate it."
+                )
+            preview, config = prepare_edit(self.store, workflow, new_config)
+            if not preview.ok or config is None:
+                raise EditRefused(preview.errors)
+            data = config.model_dump(mode="json")
+            because = (
+                f"activated by {actor}: config version {preview.new_version} replaces version "
+                f"{active}"
+            )
+            if reason.strip():
+                because += f"; {reason}"
+            self.store.append(
+                ev.ConfigActivated(
+                    at=self._now(),
+                    actor=actor,
+                    workflow=workflow,
+                    config_version=preview.new_version,
+                    base_version=active,
+                    config=data,
+                    config_hash=_config_hash(data),
+                    changes=tuple(change.model_dump(mode="json") for change in preview.changes),
+                    diff=preview.diff,
+                    counts=preview.counts(),
+                    warnings=preview.warnings,
+                    reason=reason,
+                    because=because,
+                )
+            )
+            return self.staffing_warnings(workflow)
 
     # --- labelers -------------------------------------------------------------------------
 
@@ -463,7 +544,7 @@ class Engine:
                 raise InvalidLabel(["the label must contain only JSON values"]) from None
             except LabelValidationError as error:
                 raise InvalidLabel(error.problems) from error
-            self._check_shown(workflow, slot, stage.show_prior, shown)
+            self._check_shown(workflow, slot, self._could_show_prior(slot, version), shown)
             at = self._now()
             label_id = next_id(self.store, "label")
             self.store.append(
@@ -486,11 +567,33 @@ class Engine:
                     because=f"{user} submitted the label for slot {slot_id} of {slot['stage']}",
                 )
             )
-            flow = self._flow(workflow, at)
+            flow = self._flow(workflow, at, version)
             if stage.score_against:
                 flow.score(stage, slot["item"], label_id, user, label)
             flow.slots_closed(slot["stage"], slot["item"])
             return label_id
+
+    def _could_show_prior(self, slot: Row, version: int) -> bool:
+        """Whether the interface may have shown earlier labels for this claimed slot.
+
+        That is so if the slot's stage shows them under the version in force now, or under
+        any version since the slot was claimed: an edit that makes the stage blind must not
+        reject a label whose author was legitimately shown earlier labels before it.
+        """
+        workflow, stage = slot["workflow"], slot["stage"]
+        if config_at(self.store, workflow, version).stage(stage).show_prior:
+            return True
+        claims = [
+            e
+            for e in self.store.events(workflow=workflow, item=slot["item"])
+            if isinstance(e, ev.SlotClaimed) and e.slot == slot["slot"]
+        ]
+        since = claims[-1].config_version if claims else version
+        for earlier in range(since or version, version):
+            config = config_at(self.store, workflow, earlier)
+            if stage in config.stage_names and config.stage(stage).show_prior:
+                return True
+        return False
 
     def _check_shown(self, workflow: str, slot: Row, stage_shows_prior: bool, shown: Shown) -> None:
         """Check that what the interface reports showing fits the item and its labels."""
@@ -606,7 +709,7 @@ class Engine:
             for slot in sorted(open_slots, key=lambda s: (s["admitted_seq"], s["index"])):
                 by_item.setdefault(slot["item"], []).append(slot)
             at = self._now()
-            flow = self._flow(workflow, at)
+            flow = self._flow(workflow, at, version)
             for item, slots in by_item.items():
                 self.store.append(
                     ev.SlotsCancelled(
@@ -654,6 +757,11 @@ class Engine:
     def sampling_report(self, workflow: str) -> list[dict[str, Any]]:
         with self.store.transaction():
             return sampling_report(self.store, workflow)
+
+
+def _config_hash(data: Mapping[str, Any]) -> str:
+    """The fingerprint of a config version: the SHA-256 of its canonical JSON."""
+    return hashlib.sha256(canonical_json(data).encode()).hexdigest()
 
 
 def _check_text(value: object, what: str) -> None:

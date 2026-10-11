@@ -5,7 +5,6 @@ import pytest
 from ltq.engine import (
     AlreadyExists,
     Engine,
-    InMemoryStore,
     InvalidRequest,
     NotAllowed,
     UnknownDataset,
@@ -121,10 +120,13 @@ def test_a_workflow_name_is_used_once(engine, cfg):
         engine.start_workflow(cfg(ONE_STAGE), 1, "admin")
     with pytest.raises(InvalidRequest, match="seed"):
         engine.start_workflow(cfg(ONE_STAGE, workflow="w2"), "1", "admin")
+    for seed in (-1, 2**63):
+        with pytest.raises(InvalidRequest, match="seed"):
+            engine.start_workflow(cfg(ONE_STAGE, workflow="w2"), seed, "admin")
 
 
-def test_staffing_warnings(cfg):
-    engine = Engine(InMemoryStore(), LabelTaskRegistry([StandInLabelTask()]))
+def test_staffing_warnings(cfg, make_store):
+    engine = Engine(make_store(), LabelTaskRegistry([StandInLabelTask()]))
     for role in ("annotator", "expert"):
         engine.define_role(role, "admin")
     engine.grant_role("ana", "annotator", "admin", "setup")

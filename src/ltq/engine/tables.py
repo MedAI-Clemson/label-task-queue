@@ -298,7 +298,7 @@ def _copy_row(row: Mapping[str, Any]) -> Row:
     return {k: _copy_json(v) if isinstance(v, dict | list) else v for k, v in row.items()}
 
 
-def _check_value(table: Table, column: str, value: Any) -> Any:
+def check_value(table: Table, column: str, value: Any) -> Any:
     """Check a value against its column type; return it as stored (ints in float columns
     become floats, as SQL would store them)."""
     kind, nullable = table.column_type(column)
@@ -363,7 +363,7 @@ class InMemoryTables:
             missing = sorted(set(spec.columns) - set(row))
             extra = sorted(set(row) - set(spec.columns))
             raise IntegrityError(f"Row for {table}: missing {missing}, unknown {extra}.")
-        stored = {column: _check_value(spec, column, row[column]) for column in spec.columns}
+        stored = {column: check_value(spec, column, row[column]) for column in spec.columns}
         key = tuple(stored[column] for column in spec.key)
         if key in self._rows[table]:
             raise IntegrityError(f"{table} already has a row with key {key}.")
@@ -380,7 +380,7 @@ class InMemoryTables:
             if column not in spec.columns or column in spec.key:
                 raise IntegrityError(f"{table}.{column} cannot be updated.")
         new = dict(old)
-        new.update({column: _check_value(spec, column, value) for column, value in changes.items()})
+        new.update({column: check_value(spec, column, value) for column, value in changes.items()})
         self._check_unique(spec, row_key, new)
         self._journal_and_put(table, row_key, _copy_row(new))
 

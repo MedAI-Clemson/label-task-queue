@@ -1,8 +1,10 @@
 """``explain(item)``: why an item went where it went, and why it is waiting, if it is.
 
 The trace is every logged event about the item in the workflow, in order, each with its
-``because``. When the item is still in progress, each of its open or claimed slots gets a
-plain-language reason, built from the same eligibility rules ``request_work`` uses.
+``because``. It also marks each config version activated while the item was in the workflow,
+since decisions after that point follow the new version. When the item is still in progress,
+each of its open or claimed slots gets a plain-language reason, built from the same
+eligibility rules ``request_work`` uses.
 """
 
 from __future__ import annotations
@@ -110,6 +112,7 @@ _VERBS = {
     "item_excluded": "excluded",
     "slots_cancelled": "cancelled",
     "item_finalized": "final",
+    "config_activated": "new config",
 }
 
 
@@ -147,19 +150,51 @@ def explain(store: Store, workflow: str, item: str) -> Explanation:
         status=export_status(tables, workflow, item),
         final=final,
         trace=tuple(
-            TraceEntry(
-                seq=e.seq,
-                at=e.at,
-                type=e.type,
-                stage=e.stage,
-                actor=e.actor,
-                summary=_summary(e),
-                because=e.because,
+            sorted(
+                [
+                    TraceEntry(
+                        seq=e.seq,
+                        at=e.at,
+                        type=e.type,
+                        stage=e.stage,
+                        actor=e.actor,
+                        summary=_summary(e),
+                        because=e.because,
+                    )
+                    for e in about
+                ]
+                + _activations(tables, workflow, row),
+                key=lambda entry: entry.seq,
             )
-            for e in about
         ),
         waiting=waiting,
     )
+
+
+def _activations(tables: Tables, workflow: str, item: Row) -> list[TraceEntry]:
+    """The config versions activated while the item was in the workflow (from the derived
+    table, so explain never reads the whole workflow's log)."""
+    entries = []
+    for version in tables.select("workflow_versions", workflow=workflow):
+        closed = item["closed_seq"]
+        if version["seq"] < item["entered_seq"] or (closed is not None and version["seq"] > closed):
+            continue
+        number = version["version"]
+        entries.append(
+            TraceEntry(
+                seq=version["seq"],
+                at=datetime.fromisoformat(version["activated_at"]),
+                type="config_activated",
+                stage=None,
+                actor=version["activated_by"],
+                summary=f"config version {number} of {workflow} is in force",
+                because=(
+                    f"activated by {version['activated_by']}; decisions about this item from "
+                    f"here on follow version {number}"
+                ),
+            )
+        )
+    return entries
 
 
 # --- why a slot is waiting -----------------------------------------------------------------

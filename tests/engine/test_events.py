@@ -6,7 +6,6 @@ import pytest
 
 from ltq.engine import (
     BrokenChain,
-    InMemoryStore,
     event_from_json,
     event_hash,
     event_to_json,
@@ -119,8 +118,8 @@ def test_rebuild_needs_an_empty_store(engine):
         rebuild(engine.store.events(), store=engine.store)
 
 
-def test_append_needs_a_transaction():
-    store = InMemoryStore()
+def test_append_needs_a_transaction(make_store):
+    store = make_store()
     event = ev.DatasetCreated(at="2026-10-10T09:00:00Z", dataset="ds", because="test")
     with pytest.raises(RuntimeError, match="transaction"):
         store.append(event)

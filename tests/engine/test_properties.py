@@ -22,7 +22,6 @@ from ltq.engine import (
     BrokenChain,
     Engine,
     EngineError,
-    InMemoryStore,
     InvalidLabel,
     rebuild,
     verify_chain,
@@ -115,8 +114,8 @@ def gold(i: int) -> dict:
     return {} if i % 3 == 2 else {"gold_key": {"value": VALUES[i % 2]}}
 
 
-def new_project(config_names, seed) -> tuple[Engine, list[str]]:
-    engine = Engine(InMemoryStore(), LabelTaskRegistry([StandInLabelTask()]))
+def new_project(make_store, config_names, seed) -> tuple[Engine, list[str]]:
+    engine = Engine(make_store(), LabelTaskRegistry([StandInLabelTask()]))
     for role in ROLES:
         engine.define_role(role, "admin")
     for user, roles in GRANTS.items():
@@ -271,28 +270,37 @@ def check_invariants(engine: Engine, workflows: list[str]) -> None:
 @settings(
     max_examples=80,
     deadline=None,
-    suppress_health_check=[HealthCheck.too_slow, HealthCheck.data_too_large],
+    suppress_health_check=[
+        HealthCheck.too_slow,
+        HealthCheck.data_too_large,
+        # make_store hands out a fresh store on every call, so sharing it is safe
+        HealthCheck.function_scoped_fixture,
+    ],
 )
 @given(
     config_names=st.lists(st.sampled_from(sorted(CONFIGS)), min_size=1, max_size=2, unique=True),
     seed=st.integers(0, 2**31),
     ops=operations,
 )
-def test_random_commands_keep_every_invariant(config_names, seed, ops):
-    engine, workflows = new_project(config_names, seed)
+def test_random_commands_keep_every_invariant(make_store, config_names, seed, ops):
+    engine, workflows = new_project(make_store, config_names, seed)
     for op in ops:
         run(engine, workflows, op)
     check_invariants(engine, workflows)
 
 
-@settings(max_examples=40, deadline=None)
+@settings(
+    max_examples=40,
+    deadline=None,
+    suppress_health_check=[HealthCheck.function_scoped_fixture],
+)
 @given(
     config_name=st.sampled_from(sorted(CONFIGS)),
     ops=operations,
     data=st.data(),
 )
-def test_tampering_with_any_event_breaks_the_chain(config_name, ops, data):
-    engine, workflows = new_project([config_name], 7)
+def test_tampering_with_any_event_breaks_the_chain(make_store, config_name, ops, data):
+    engine, workflows = new_project(make_store, [config_name], 7)
     for op in ops:
         run(engine, workflows, op)
     events = engine.store.events()
@@ -312,18 +320,22 @@ def test_tampering_with_any_event_breaks_the_chain(config_name, ops, data):
         raise AssertionError(f"changing {field} of event {position + 1} went unnoticed")
 
 
-@settings(max_examples=25, deadline=None)
+@settings(
+    max_examples=25,
+    deadline=None,
+    suppress_health_check=[HealthCheck.function_scoped_fixture],
+)
 @given(
     low=st.floats(0.05, 0.95),
     extra=st.floats(0.01, 0.5),
     seed=st.integers(0, 2**31),
 )
-def test_admission_rises_with_the_fraction(low, extra, seed):
+def test_admission_rises_with_the_fraction(make_store, low, extra, seed):
     """Items admitted at sample f are admitted at every larger f'."""
     high = min(1.0, low + extra)
     admitted = []
     for fraction in (low, high):
-        engine = Engine(InMemoryStore(), LabelTaskRegistry([StandInLabelTask()]))
+        engine = Engine(make_store(), LabelTaskRegistry([StandInLabelTask()]))
         engine.define_role("annotator", "admin")
         engine.create_dataset("ds", "admin")
         for i in range(20):

@@ -1,16 +1,61 @@
-"""Shared helpers for the engine tests: a deterministic clock, a small project, configs."""
+"""Shared helpers for the engine tests: a deterministic clock, a small project, configs.
+
+Every engine test that makes a store runs twice, once on the in-memory store and once on a
+SQLite file: the ``make_store`` fixture is parametrized over both, and the ``build``
+fixture uses it. A test that needs a bare store takes ``make_store`` and calls it.
+"""
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+import functools
+from collections.abc import Callable, Iterator, Mapping
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import pytest
 
-from ltq.engine import Engine, InMemoryStore
+from ltq.engine import Engine, InMemoryStore, Store
 from ltq.labeltask import LabelTaskRegistry
 from ltq.labeltask.standin import StandInLabelTask
+from ltq.store import SqlStore, connect, create_schema
+
+STORE_KINDS = ("memory", "sqlite")
+
+
+class StoreMaker:
+    """Makes empty stores of one kind. All SQLite stores of a test share one temporary
+    database file (and engine); each is a project of its own, so each starts empty."""
+
+    def __init__(self, kind: str, directory: Path):
+        self.kind = kind
+        self.engine = None
+        if kind == "sqlite":
+            # durability does not matter in tests, so skip the fsyncs
+            self.engine = connect(f"sqlite:///{directory / 'store.db'}", synchronous="OFF")
+            create_schema(self.engine)
+        self.made = 0
+
+    def __call__(self) -> Store:
+        self.made += 1
+        if self.engine is None:
+            return InMemoryStore()
+        return SqlStore(self.engine, f"test{self.made}")
+
+    def close(self) -> None:
+        if self.engine is not None:
+            self.engine.dispose()
+
+
+@pytest.fixture(params=STORE_KINDS)
+def make_store(request, tmp_path) -> Iterator[StoreMaker]:
+    """Makes fresh, empty stores of the kind this test run is parametrized with."""
+    maker = StoreMaker(request.param, tmp_path)
+    try:
+        yield maker
+    finally:
+        maker.close()
+
 
 DEFAULT_GRANTS = {
     "ana": ("annotator",),
@@ -41,11 +86,15 @@ def build_engine(
     seed: int = 1234,
     properties: Callable[[int], dict] | None = None,
     task: StandInLabelTask | None = None,
+    store: Store | None = None,
+    make_store: Callable[[], Store] = InMemoryStore,
 ) -> Engine:
     """A project with roles, people, a dataset ``ds`` of ``items`` images, and optionally a
     started workflow."""
     engine = Engine(
-        InMemoryStore(), LabelTaskRegistry([task or StandInLabelTask()]), clock=FakeClock()
+        make_store() if store is None else store,
+        LabelTaskRegistry([task or StandInLabelTask()]),
+        clock=FakeClock(),
     )
     for role in roles:
         engine.define_role(role, "admin")
@@ -89,9 +138,9 @@ def do_work(engine: Engine, workflow: str, user: str, value: str = "cat", **kwar
     return slot, label_id
 
 
-@pytest.fixture(scope="session")
-def build() -> Callable[..., Engine]:
-    return build_engine
+@pytest.fixture
+def build(make_store) -> Callable[..., Engine]:
+    return functools.partial(build_engine, make_store=make_store)
 
 
 @pytest.fixture(scope="session")

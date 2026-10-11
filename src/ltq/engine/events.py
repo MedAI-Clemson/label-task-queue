@@ -119,6 +119,30 @@ class WorkflowStarted(_Event):
     config_hash: str
 
 
+class ConfigActivated(_Event):
+    """An admin activated a new config version of a running workflow (a forward-only edit).
+
+    ``config_version`` is the new version. It governs only decisions made from this event
+    on; nothing else changes at activation. The event carries what the admin saw in the
+    change preview: the classified changes, the diff and the counts (see ``edits``).
+    """
+
+    type: Literal["config_activated"] = "config_activated"
+    base_version: int
+    """The version this one replaces (the one the change was previewed against)."""
+    config: JsonDict
+    """The full config of the new version, every default filled in."""
+    config_hash: str
+    changes: tuple[JsonDict, ...]
+    """Each change, as ``edits.Change``: kind, stage, before, after, summary, effect."""
+    diff: str
+    """A unified diff of the two resolved YAML documents."""
+    counts: JsonDict
+    """The preview's counts of what the change touches (see ``ChangePreview.counts``)."""
+    warnings: tuple[str, ...] = ()
+    reason: str = ""
+
+
 class ItemEntered(_Event):
     """An item of the workflow's dataset entered the workflow."""
 
@@ -240,6 +264,7 @@ Event = Annotated[
     | DatasetCreated
     | ItemImported
     | WorkflowStarted
+    | ConfigActivated
     | ItemEntered
     | AdmissionDecided
     | SlotClaimed

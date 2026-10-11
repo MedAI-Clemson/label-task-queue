@@ -61,6 +61,23 @@ class SlotNotYours(NotAllowed):
     """The slot is not currently claimed by the person acting on it."""
 
 
+class EditRefused(NotAllowed):
+    """A proposed config edit cannot be activated. ``problems`` lists every reason.
+
+    Either the config is not valid, or a change needs a new workflow (or must wait, such as
+    removing a stage that still has open or claimed slots). The change preview shows the
+    same reasons.
+    """
+
+    def __init__(self, problems: Sequence[str]):
+        self.problems = list(problems)
+        super().__init__("The edit was not activated: " + " ".join(self.problems))
+
+
+class VersionConflict(NotAllowed):
+    """The edit was previewed against a config version that is no longer the active one."""
+
+
 class InvalidRequest(EngineError):
     """A request argument is malformed (an empty reason, a bad name, ...)."""
 

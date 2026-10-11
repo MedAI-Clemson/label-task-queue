@@ -115,6 +115,22 @@ def _workflow_started(tables: Tables, e: ev.WorkflowStarted) -> None:
     )
 
 
+def _config_activated(tables: Tables, e: ev.ConfigActivated) -> None:
+    tables.insert(
+        "workflow_versions",
+        {
+            "workflow": e.workflow,
+            "version": e.config_version,
+            "config": e.config,
+            "config_hash": e.config_hash,
+            "activated_by": e.actor,
+            "activated_at": _time(e),
+            "seq": e.seq,
+        },
+    )
+    tables.update("workflows", {"workflow": e.workflow}, {"active_version": e.config_version})
+
+
 def _item_entered(tables: Tables, e: ev.ItemEntered) -> None:
     tables.insert(
         "workflow_items",
@@ -331,6 +347,7 @@ _REDUCERS: dict[str, Callable[[Tables, Any], None]] = {
     "dataset_created": _dataset_created,
     "item_imported": _item_imported,
     "workflow_started": _workflow_started,
+    "config_activated": _config_activated,
     "item_entered": _item_entered,
     "admission_decided": _admission_decided,
     "slot_claimed": _slot_claimed,

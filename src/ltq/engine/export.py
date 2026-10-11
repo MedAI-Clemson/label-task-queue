@@ -9,6 +9,8 @@ label, a list of label ids, a list of roles) are given as canonical JSON text.
 - ``score_report``: per stage and labeler, how many labels agreed with the key.
 - ``sampling_report``: per stage, how many items arrived and how many were admitted, also
   per upstream labeler, so the actual sampling rates can be checked.
+
+Stages removed by an edit keep their rows: their history stays visible.
 """
 
 from __future__ import annotations
@@ -17,7 +19,7 @@ from collections import defaultdict
 from typing import Any
 
 from ltq.engine.events import canonical_json
-from ltq.engine.queries import active_config, labels_of, workflow_row
+from ltq.engine.queries import active_config, labels_of, stages_ever, workflow_row
 from ltq.engine.tables import Tables
 
 ExportRow = dict[str, Any]
@@ -130,39 +132,47 @@ def score_report(tables: Tables, workflow: str) -> list[ExportRow]:
 
 
 def sampling_report(tables: Tables, workflow: str) -> list[ExportRow]:
-    """Per stage: items arrived, admitted, and the actual rate next to ``sample``.
+    """Per stage and sample value: items arrived, admitted, and the actual rate.
 
-    The first row of each stage counts every arrival (``upstream_labeler`` is None). For a
+    ``sample`` is the threshold the arrivals were compared to. A stage whose ``sample`` an
+    edit changed gets one group of rows per value, in the order they were used, so each
+    rate sits next to the sample that produced it. Stages are listed in config order, then
+    stages that an edit removed.
+
+    The first row of each group counts every arrival (``upstream_labeler`` is None). For a
     stage with an input, further rows split the arrivals by who labeled the item in the
     input stage; an item with several upstream labels counts once for each labeler.
     """
-    _, config = active_config(tables, workflow)
     rows = []
-    for stage in config.stages:
+    for stage in stages_ever(tables, workflow):
         arrivals = sorted(
             tables.select("admissions", workflow=workflow, stage=stage.name),
             key=lambda r: r["seq"],
         )
-        groups: dict[str | None, list[dict]] = {None: arrivals}
-        if stage.input_ref is not None:
-            upstream = stage.input_ref.stage
-            for arrival in arrivals:
-                for label in labels_of(tables, workflow, arrival["item"], upstream):
-                    groups.setdefault(label["user"], []).append(arrival)
-        for labeler in [None, *sorted(k for k in groups if k is not None)]:
-            group = groups[labeler]
-            admitted = sum(1 for a in group if a["admitted"])
-            rows.append(
-                {
-                    "workflow": workflow,
-                    "stage": stage.name,
-                    "input": stage.input,
-                    "sample": stage.sample,
-                    "upstream_labeler": labeler,
-                    "arrived": len(group),
-                    "admitted": admitted,
-                    "rate": admitted / len(group) if group else None,
-                    "slots": sum(a["n_slots"] for a in group),
-                }
-            )
+        by_sample: dict[float, list[dict]] = {}
+        for arrival in arrivals:
+            by_sample.setdefault(arrival["threshold"], []).append(arrival)
+        for sample, arrived in (by_sample or {stage.sample: []}).items():
+            groups: dict[str | None, list[dict]] = {None: arrived}
+            if stage.input_ref is not None:
+                upstream = stage.input_ref.stage
+                for arrival in arrived:
+                    for label in labels_of(tables, workflow, arrival["item"], upstream):
+                        groups.setdefault(label["user"], []).append(arrival)
+            for labeler in [None, *sorted(k for k in groups if k is not None)]:
+                group = groups[labeler]
+                admitted = sum(1 for a in group if a["admitted"])
+                rows.append(
+                    {
+                        "workflow": workflow,
+                        "stage": stage.name,
+                        "input": stage.input,
+                        "sample": sample,
+                        "upstream_labeler": labeler,
+                        "arrived": len(group),
+                        "admitted": admitted,
+                        "rate": admitted / len(group) if group else None,
+                        "slots": sum(a["n_slots"] for a in group),
+                    }
+                )
     return rows

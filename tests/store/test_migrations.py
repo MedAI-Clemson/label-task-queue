@@ -140,6 +140,44 @@ def test_the_migrated_database_works_with_the_store(migrated, build_engine, scri
         connection.exec_driver_sql("DELETE FROM events")
 
 
+def test_the_accounts_migration_adds_the_deployment_tables(migrated):
+    inspector = sa.inspect(migrated)
+    assert {"accounts", "sessions", "projects"} <= set(inspector.get_table_names())
+    assert [c["name"] for c in inspector.get_columns("accounts")] == [
+        "user_id",
+        "display_name",
+        "password_hash",
+        "is_admin",
+        "active",
+        "created_by",
+        "created_at",
+    ]
+    assert inspector.get_pk_constraint("sessions")["constrained_columns"] == ["token_hash"]
+    assert [i["name"] for i in inspector.get_indexes("sessions")] == ["ix_sessions_user_id"]
+
+
+def test_the_accounts_migration_keeps_an_existing_project(config, url, build_engine, script):
+    """Upgrading a database made at revision 0001 leaves its events and tables untouched."""
+    command.upgrade(config, "0001")
+    engine = connect(url)
+    try:
+        store = SqlStore(engine, "demo")
+        script(build_engine(store))
+        before = store.snapshot()
+        engine.dispose()
+        command.upgrade(config, "head")
+        engine = connect(url)
+        store = SqlStore(engine, "demo")
+        assert store.snapshot() == before
+        assert store.verify_derived().identical
+        command.downgrade(config, "0001")
+        tables = set(sa.inspect(engine).get_table_names())
+        assert not tables & {"accounts", "sessions", "projects"}
+        assert "events" in tables
+    finally:
+        engine.dispose()
+
+
 def test_there_is_one_head_and_it_can_be_undone(config, url, migrated):
     heads = ScriptDirectory.from_config(config).get_heads()
     assert len(heads) == 1

@@ -1,11 +1,12 @@
-"""The web API (FastAPI). Phase 1 milestone 6; only a health check so far."""
+"""The web API (FastAPI): accounts and login, projects, and the labeling engine over HTTP.
 
-from fastapi import FastAPI
+``create_app(settings)`` builds an app; ``app`` is the one uvicorn serves
+(``uvicorn ltq.api:app``), configured from the environment (see ``settings``).
+"""
 
-app = FastAPI(title="label-task-queue")
+from ltq.api.app import create_app
+from ltq.api.settings import Settings
 
+app = create_app()
 
-@app.get("/health")
-def health() -> dict[str, str]:
-    """Report that the service is running."""
-    return {"status": "ok"}
+__all__ = ["Settings", "app", "create_app"]

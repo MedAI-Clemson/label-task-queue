@@ -23,6 +23,7 @@ from sqlalchemy import DDL, event
 
 from ltq.engine.events import GENESIS_HASH
 from ltq.engine.tables import SCHEMA, Table
+from ltq.store.deployment import add_deployment_tables
 
 PROJECT = "project"
 """The column that tells projects apart in every table."""
@@ -167,7 +168,8 @@ _METADATA: dict[tuple, sa.MetaData] = {}
 
 
 def build_metadata(schema: tuple[Table, ...] = SCHEMA) -> sa.MetaData:
-    """The SQLAlchemy tables for a schema, with their constraints, indexes and triggers.
+    """The SQLAlchemy tables for a schema, with their constraints, indexes and triggers,
+    plus the deployment tables (accounts, sessions, projects; see ``deployment``).
 
     The result is cached and shared (SQLAlchemy compiles each statement once per table
     object), so treat it as read-only.
@@ -181,6 +183,7 @@ def build_metadata(schema: tuple[Table, ...] = SCHEMA) -> sa.MetaData:
         if "slots" in metadata.tables:
             _add_slot_rules(metadata.tables["slots"])
             _attach_triggers(metadata.tables["slots"], SLOT_TRIGGERS)
+        add_deployment_tables(metadata)
         _METADATA[signature] = metadata
     return _METADATA[signature]
 

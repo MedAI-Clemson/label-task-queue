@@ -395,16 +395,17 @@ def _role_shortage(stage: Stage, holders: int) -> str | None:
     needed, what = _labels_needed(stage.labels_per_item)
     if holders >= needed:
         return None
+    people = "someone" if needed == 1 else f"{needed} different people"
     if holders == 0:
         return (
-            f"Stage '{stage.name}' needs {needed} different people {what}, but nobody holds "
+            f"Stage '{stage.name}' needs {people} {what}, but nobody holds "
             f"{held}. Its slots will wait until people are given {the_role}."
         )
     who = "only 1 person holds" if holders == 1 else f"only {holders} people hold"
     shortfall = needed - holders
     more = "one more person" if shortfall == 1 else f"{shortfall} more people"
     return (
-        f"Stage '{stage.name}' needs {needed} different people {what}, but {who} {held}. "
+        f"Stage '{stage.name}' needs {people} {what}, but {who} {held}. "
         "Some items will wait for another person, because nobody labels the same item twice. "
         f"Give {the_role} to {more}, or lower `labels_per_item`."
     )

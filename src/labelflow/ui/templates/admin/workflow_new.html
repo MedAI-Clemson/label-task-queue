@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Start a workflow · label-task-queue{% endblock %}
+{% block head %}{% include "partials/mermaid_head.html" %}{% endblock %}
+{% block content %}
+<p class="crumbs"><a href="{{ root }}/admin/projects">Projects</a> › <a href="{{ root }}/admin/projects/{{ project }}">{{ project }}</a></p>
+<h1>Start a workflow in {{ project }}</h1>
+<p class="muted">Paste the workflow config (YAML). It is checked as you type against this project's roles, datasets and label tasks; starting it admits every item of its dataset at once.</p>
+<div class="two-col">
+  <form method="post" action="{{ root }}/admin/projects/{{ project }}/workflows" class="stack" id="start-form">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label for="config">Config (YAML)</label>
+    <textarea id="config" name="config" rows="22" spellcheck="false" required
+      hx-post="{{ root }}/admin/projects/{{ project }}/workflows/validate"
+      hx-trigger="load, keyup changed delay:500ms"
+      hx-include="closest form"
+      hx-target="#validation">{{ config }}</textarea>
+    <label for="seed">Seed <span class="muted">(optional: a whole number that fixes every random draw)</span></label>
+    <input id="seed" name="seed" inputmode="numeric" pattern="[0-9]*" value="{{ seed or '' }}">
+    <button type="submit">Start workflow</button>
+  </form>
+  <section id="validation" aria-live="polite" class="card">
+    {% if report is defined and report is not none %}{% include "partials/validation.html" %}{% else %}<p class="muted">Paste or type a config to check it.</p>{% endif %}
+  </section>
+</div>
+{% endblock %}

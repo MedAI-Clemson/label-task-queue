@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}No work · label-task-queue{% endblock %}
+{% block content %}
+<p class="crumbs"><a href="{{ root }}/">Home</a> › project {{ project }} › <a href="{{ root }}/projects/{{ project }}/workflows/{{ workflow.workflow }}">{{ workflow.workflow }}</a></p>
+<h1>No work for you right now</h1>
+{% set paused_stages = workflow.stages | selectattr("paused") | list %}
+{% if workflow.paused %}
+  <p>The workflow is <strong>paused</strong> by {{ workflow.paused.by }}: {{ workflow.paused.reason }}. No work is handed out until it is resumed.</p>
+{% elif not my_roles %}
+  <p>You hold no role that any stage of this workflow is assigned to.</p>
+{% elif paused_stages %}
+  <p>Some stages are paused: {% for s in paused_stages %}<strong>{{ s.name }}</strong> (by {{ s.paused.by }}: {{ s.paused.reason }}){{ ", " if not loop.last }}{% endfor %}. Nothing else is open for you.</p>
+{% else %}
+  <p>Every slot you could take is already claimed, labeled by you, or waiting for someone else. Check again later.</p>
+{% endif %}
+<p><a class="button" href="{{ root }}/">Back to your work</a></p>
+{% endblock %}

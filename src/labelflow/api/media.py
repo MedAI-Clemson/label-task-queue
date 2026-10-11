@@ -2,11 +2,10 @@
 
 The design says the image is hashed at import and the system never assumes where images
 live. The caller may send the hash. If it does not, the server computes it, but only for a
-file it can read: a ``file://`` URI, or a path inside ``LABELFLOW_MEDIA_ROOT``. Anything else
-(a web address, a path the server cannot see) is refused with a message asking for the hash.
-
-When ``LABELFLOW_MEDIA_ROOT`` is set, every file the server hashes must lie inside it, so an
-import cannot be used to read other files on the server.
+file inside ``LABELFLOW_MEDIA_ROOT``: a path relative to that folder, an absolute path or a
+``file://`` address inside it. Anything else (a web address, a file elsewhere on the server)
+is refused with a message asking for the hash. Without a media folder the server reads no
+file at all: every item must come with its hash.
 """
 
 from __future__ import annotations
@@ -25,6 +24,8 @@ class CannotHash(Exception):
 
 def content_hash(item: str, uri: str, media_root: Path | None) -> str:
     """The SHA-256 of the image a uri names, as 64 hexadecimal characters."""
+    if media_root is None:
+        raise _refuse(item, "the server has no media folder, so it does not hash files.")
     path = _file_for(item, uri, media_root)
     digest = hashlib.sha256()
     try:
@@ -43,28 +44,20 @@ def _refuse(item: str, why: str) -> CannotHash:
     )
 
 
-def _file_for(item: str, uri: str, media_root: Path | None) -> Path:
-    """The local file a uri names, if the server may read it."""
+def _file_for(item: str, uri: str, media_root: Path) -> Path:
+    """The file inside the media folder that a uri names."""
     parsed = urlparse(uri)
     if parsed.scheme == "file":
         if parsed.netloc not in ("", "localhost"):
             raise _refuse(item, f"its uri '{uri}' is a file on another computer.")
         path = Path(url2pathname(parsed.path))
     elif not parsed.scheme:
-        path = Path(uri)
-        if not path.is_absolute():
-            if media_root is None:
-                raise _refuse(
-                    item, f"its uri '{uri}' is a relative path, and the server has no media folder."
-                )
-            path = media_root / path
+        path = media_root / uri
     else:
         raise _refuse(item, f"its uri '{uri}' is not a file on the server.")
-    if media_root is not None:
-        resolved = path.resolve()
-        if not resolved.is_relative_to(media_root.resolve()):
-            raise _refuse(item, f"its uri '{uri}' is outside the server's media folder.")
-        path = resolved
-    if not path.is_file():
+    resolved = path.resolve()
+    if not resolved.is_relative_to(media_root.resolve()):
+        raise _refuse(item, f"its uri '{uri}' is outside the server's media folder.")
+    if not resolved.is_file():
         raise _refuse(item, f"no file was found at its uri '{uri}'.")
-    return path
+    return resolved

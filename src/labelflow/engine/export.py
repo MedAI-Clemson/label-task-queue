@@ -4,8 +4,10 @@ Every row is a flat dict of plain values, ready for CSV or Parquet: composite va
 label, a list of label ids, a list of roles) are given as canonical JSON text.
 
 - ``export_items``: one row per item, with its final label and how it was decided.
-- ``export_labels``: one row per label, with who made it, the roles they held then, the
-  stage, the config version, what they were shown and the score against a key where set.
+- ``export_labels``: one row per label, with who made it, the roles they held then
+  (``roles_at_claim``: at the claim, which is what eligibility was checked against; ``roles``:
+  at the submit), the stage, the config version, what they were shown and the score against
+  a key where set.
 - ``score_report``: per stage and labeler, how many labels agreed with the key.
 - ``sampling_report``: per stage, how many items arrived and how many were admitted, also
   per upstream labeler, so the actual sampling rates can be checked.
@@ -77,7 +79,12 @@ def export_items(tables: Tables, workflow: str) -> list[ExportRow]:
 
 
 def export_labels(tables: Tables, workflow: str) -> list[ExportRow]:
-    """One row per label, in submission order."""
+    """One row per label, in submission order.
+
+    ``roles_at_claim`` lists the roles the labeler held when they claimed the slot: the
+    roles that made them eligible. ``roles`` lists the roles held at the submit; a role
+    revoked in between is missing there (a held claim survives a role change).
+    """
     workflow_row(tables, workflow)
     rows = []
     for label in tables.select("labels", workflow=workflow):
@@ -91,6 +98,7 @@ def export_labels(tables: Tables, workflow: str) -> list[ExportRow]:
                 "slot": label["slot"],
                 "labeler": label["user"],
                 "roles": _json(label["roles"]),
+                "roles_at_claim": _json(label["roles_at_claim"]),
                 "config_version": label["config_version"],
                 "label_task": label["label_task"],
                 "ontology_version": label["ontology_version"],

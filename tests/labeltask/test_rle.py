@@ -4,7 +4,7 @@ import json
 
 import numpy as np
 import pytest
-from hypothesis import given
+from hypothesis import assume, given
 from hypothesis import strategies as st
 from hypothesis.extra.numpy import arrays
 
@@ -176,6 +176,205 @@ def test_iou(first, second, iou):
 def test_iou_needs_masks_of_the_same_size():
     with pytest.raises(ValueError, match="different sizes"):
         rle.mask_iou(mask_from_rows("..."), mask_from_rows("..", ".."))
+    with pytest.raises(ValueError, match="different sizes"):
+        rle.iou({"size": [1, 3], "counts": [3]}, {"size": [2, 2], "counts": [4]})
+    with pytest.raises(ValueError, match="different sizes"):
+        rle.counts_iou([3], [4])
+
+
+@pytest.mark.parametrize(
+    ("first", "second", "iou"),
+    [
+        pytest.param(["###.", "...."], [".###", "...."], 2 / 4, id="overlapping"),
+        pytest.param(["...", "..."], ["...", "..."], 1.0, id="two-empty-masks-agree"),
+        pytest.param(["..."], ["#.."], 0.0, id="empty-against-non-empty"),
+        pytest.param(["#.#", ".#."], ["#.#", ".#."], 1.0, id="identical-checkerboards"),
+        pytest.param(["#.#", ".#."], [".#.", "#.#"], 0.0, id="opposite-checkerboards"),
+    ],
+)
+def test_iou_from_runs_without_decoding(first, second, iou):
+    first, second = mask_from_rows(*first), mask_from_rows(*second)
+    assert rle.iou(rle.encode(first), rle.encode(second)) == iou
+    assert rle.iou(rle.encode(first, compressed=False), rle.encode(second)) == iou
+
+
+@given(masks, masks)
+def test_iou_from_runs_matches_the_pixel_reference(first, second):
+    """The run-based IoU is exactly the numpy IoU of the decoded masks (same shape or not)."""
+    if first.shape != second.shape:
+        with pytest.raises(ValueError, match="different sizes"):
+            rle.iou(rle.encode(first), rle.encode(second))
+        return
+    expected = rle.mask_iou(first, second)
+    assert rle.iou(rle.encode(first), rle.encode(second)) == expected
+    runs = rle.encode(first, compressed=False)["counts"], rle.encode(second, compressed=False)
+    assert rle.counts_iou(runs[0], runs[1]["counts"]) == expected
+    assert rle.counts_iou(runs[1]["counts"], runs[0]) == expected  # symmetric
+
+
+@st.composite
+def two_masks_with_empty_runs(draw):
+    """Two masks of one size whose run lists may contain zero-length runs anywhere."""
+    height, width = draw(st.integers(1, 5)), draw(st.integers(1, 5))
+    pixels = height * width
+    masks = []
+    for _ in range(2):
+        runs = draw(st.lists(st.integers(0, 3), max_size=8))
+        assume(sum(runs) <= pixels)
+        runs.append(pixels - sum(runs))  # the last run may be empty too
+        assume(len(runs) <= pixels + 1)  # more runs than that is refused (see the caps below)
+        masks.append({"size": [height, width], "counts": runs})
+    return masks
+
+
+@given(two_masks_with_empty_runs())
+def test_iou_from_non_canonical_runs_matches_the_decoded_masks(masks):
+    """Zero-length runs in the middle (allowed, if unusual) are read the same way decode does."""
+    first, second = masks
+    assert rle.problems(first) == rle.problems(second) == []
+    expected = rle.mask_iou(rle.decode(first), rle.decode(second))
+    assert rle.iou(first, second) == expected
+    assert rle.counts_iou(first["counts"], second["counts"]) == expected
+
+
+# --- Size caps: a tiny mask must not be able to claim a huge image ------------------------
+
+
+def test_the_default_caps_are_what_the_docstrings_say():
+    assert rle.MAX_SIDE == 16384
+    assert rle.MAX_PIXELS == 64 * 1024 * 1024 == 8192 * 8192
+
+
+def test_a_seven_character_mask_cannot_claim_ten_gigapixels():
+    """The counts decode to one run of 10,000,000,000 pixels, which matches 100000 x 100000."""
+    huge = {"size": [100000, 100000], "counts": "PPigPZ9"}
+    assert rle.counts_from_string("PPigPZ9") == [10_000_000_000]
+    assert rle.problems(huge) == [
+        "'size' is 100000 x 100000, but a mask can be at most 16384 pixels high and wide"
+    ]
+    for use in (rle.validate, rle.decode, rle.area, rle.to_compressed, rle.to_uncompressed):
+        with pytest.raises(RLEError, match="at most 16384 pixels high and wide"):
+            use(huge)
+    with pytest.raises(RLEError):
+        rle.iou(huge, huge)
+
+
+@pytest.mark.parametrize(
+    ("size", "message"),
+    [
+        pytest.param(
+            [16385, 1], "'size' is 16385 x 1, but a mask can be at most 16384 pixels", id="too-high"
+        ),
+        pytest.param(
+            [1, 16385], "'size' is 1 x 16385, but a mask can be at most 16384 pixels", id="too-wide"
+        ),
+        pytest.param(
+            [2**62, 2**62],
+            f"'size' is {2**62} x {2**62}, but a mask can be at most 16384 pixels",
+            id="absurd",
+        ),
+        pytest.param(
+            [8192, 8193],
+            "'size' is 8192 x 8193, which is 67117056 pixels, but a mask can have at most "
+            "67108864 pixels (about 8192 x 8192)",
+            id="one-column-over-the-pixel-cap",
+        ),
+        pytest.param(
+            [16384, 16384],
+            "'size' is 16384 x 16384, which is 268435456 pixels, but a mask can have at most "
+            "67108864 pixels",
+            id="within-the-side-cap-but-over-the-pixel-cap",
+        ),
+    ],
+)
+def test_a_mask_over_the_caps_is_refused_before_its_counts_are_read(size, message):
+    [problem] = rle.problems({"size": size, "counts": [size[0] * size[1]]})
+    assert problem.startswith(message)
+    # the same with a compressed string that would need the whole image to check (an absurd
+    # size also gives a number too long to be written, which is reported as well)
+    found = rle.problems({"size": size, "counts": rle.counts_to_string([size[0] * size[1]])})
+    assert found[0].startswith(message)
+
+
+def test_a_mask_at_the_caps_is_accepted():
+    assert rle.problems({"size": [8192, 8192], "counts": [8192 * 8192]}) == []
+    assert rle.problems({"size": [16384, 4096], "counts": [16384 * 4096]}) == []
+    assert rle.area({"size": [16384, 4096], "counts": [0, 16384 * 4096]}) == 16384 * 4096
+
+
+def test_the_pixel_cap_can_be_set_per_call():
+    small = {"size": [10, 10], "counts": [100]}
+    assert rle.problems(small, max_pixels=100) == []
+    assert rle.problems(small, max_pixels=99) == [
+        "'size' is 10 x 10, which is 100 pixels, but a mask can have at most 99 pixels"
+    ]
+    with pytest.raises(RLEError, match="at most 99 pixels"):
+        rle.decode(small, max_pixels=99)
+    # a cap above the default lets a bigger mask through, up to the side cap
+    big = {"size": [16384, 16384], "counts": [16384 * 16384]}
+    assert rle.problems(big, max_pixels=16384 * 16384) == []
+    assert rle.area(big, max_pixels=16384 * 16384) == 0
+
+
+# --- Counts caps: a huge list or string is refused without being read ---------------------
+
+
+def test_a_counts_list_may_not_have_more_runs_than_pixels_plus_one():
+    # 2 x 2 = 4 pixels: a checkerboard starting with foreground has 5 runs, which is the most
+    assert rle.problems({"size": [2, 2], "counts": [0, 1, 1, 1, 1]}) == []
+    assert rle.problems({"size": [2, 2], "counts": [0, 0, 0, 1, 1, 1, 1]}) == [
+        "'counts' lists more than 5 runs, but a mask can have at most one more run than it "
+        "has pixels"
+    ]
+
+
+def test_a_giant_counts_list_is_refused_by_its_length_alone():
+    class Unreadable(list):
+        """A list that fails if anything looks at its contents."""
+
+        def __iter__(self):
+            raise AssertionError("the runs were read")
+
+    counts = Unreadable([0] * 200)
+    [problem] = rle.problems({"size": [10, 10], "counts": counts})
+    assert problem.startswith("'counts' lists more than 101 runs")
+
+
+def test_a_giant_counts_string_is_refused_by_its_length_alone():
+    text = "0" * 2000  # 2000 runs of length 0, for a 10 x 10 mask that can have at most 101
+    [problem] = rle.problems({"size": [10, 10], "counts": text})
+    assert problem == (
+        "'counts' is 2000 characters long, which is longer than the counts of any mask with "
+        "at most 100 pixels can be"
+    )
+
+
+def test_a_counts_string_stops_being_read_once_it_has_too_many_runs():
+    text = "0" * 150  # short enough to read, but 150 runs is more than 101
+    [problem] = rle.problems({"size": [10, 10], "counts": text})
+    assert problem.startswith("'counts' lists more than 101 runs")
+    # without a size, the default pixel cap bounds the runs instead
+    assert rle.counts_from_string("0" * 150) == [0] * 150
+    with pytest.raises(RLEError, match="more than 5 runs"):
+        rle.counts_from_string("0" * 6, max_runs=5)
+
+
+def test_a_number_written_with_too_many_characters_is_refused():
+    # 'P' is 0 with the continue bit: a number can be padded this way without end
+    padded = "P" * 13 + "0"
+    [problem] = rle.problems({"size": [2, 2], "counts": padded})
+    assert problem == (
+        "'counts' has a number written with more than 13 characters (from position 1), "
+        "which compressed COCO counts never need"
+    )
+    assert rle.counts_from_string("P" * 12 + "0") == [0]  # 13 characters is still allowed
+
+
+def test_a_mask_with_a_bad_size_and_bad_counts_reports_both():
+    found = rle.problems({"size": [100000, 100000], "counts": "0~"})
+    assert len(found) == 2
+    assert found[0].startswith("'size' is 100000 x 100000")
+    assert "'~'" in found[1]
 
 
 # --- Bad masks, in plain language ---------------------------------------------------------

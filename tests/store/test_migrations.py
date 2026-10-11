@@ -156,12 +156,16 @@ def test_the_accounts_migration_adds_the_deployment_tables(migrated):
     assert [i["name"] for i in inspector.get_indexes("sessions")] == ["ix_sessions_user_id"]
 
 
+def columns_of(engine: sa.Engine, table: str) -> set[str]:
+    return {c["name"] for c in sa.inspect(engine).get_columns(table)}
+
+
 def test_upgrading_keeps_an_existing_project(config, url, build_engine, script):
-    """A project made before revisions 0002 and 0003 comes through the upgrade untouched.
+    """A project made before revisions 0002 to 0004 comes through the upgrade untouched.
 
     The store needs every table of the current schema, so the project is made at the head
     revision without pausing anything, and the database is taken back to 0001 (which drops
-    only the tables added since) before it is upgraded again.
+    only the tables and columns added since) before it is upgraded again.
     """
     command.upgrade(config, "head")
     engine = connect(url)
@@ -174,6 +178,8 @@ def test_upgrading_keeps_an_existing_project(config, url, build_engine, script):
         tables = set(sa.inspect(engine).get_table_names())
         assert not tables & {"accounts", "sessions", "projects", "workflow_pauses", "stage_pauses"}
         assert "events" in tables
+        assert "claimed_roles" not in columns_of(engine, "slots")
+        assert "roles_at_claim" not in columns_of(engine, "labels")
         engine.dispose()
         command.upgrade(config, "head")
         store = SqlStore(engine, "demo")

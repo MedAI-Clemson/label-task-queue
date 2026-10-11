@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}{{ status }} · label-task-queue{% endblock %}
+{% block mainclass %}page narrow{% endblock %}
+{% block content %}
+<h1>{% if status == 403 %}Not allowed{% elif status == 404 %}Not found{% elif status == 409 %}Not possible now{% elif status == 422 %}Not valid{% else %}Something went wrong{% endif %}</h1>
+<div class="problem" role="alert">
+  <p>{{ detail }}</p>
+  {% if problems %}<ul>{% for p in problems %}<li>{{ p }}</li>{% endfor %}</ul>{% endif %}
+</div>
+<p>Use your browser's back button to return to the form, or go <a href="{{ root }}/">home</a>.</p>
+{% endblock %}

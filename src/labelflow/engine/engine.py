@@ -42,7 +42,7 @@ from labelflow.engine.errors import (
 from labelflow.engine.events import Event, Shown, canonical_json
 from labelflow.engine.explain import Explanation, explain
 from labelflow.engine.export import export_items, export_labels, sampling_report, score_report
-from labelflow.engine.flow import Flow
+from labelflow.engine.flow import Flow, ask_task
 from labelflow.engine.queries import (
     active_config,
     active_pause,
@@ -466,7 +466,8 @@ class Engine:
                 slot=slot_id,
                 label_id=label_id,
                 user=user,
-                roles=tuple(sorted(held_roles(self.store, user))),
+                roles=tuple(sorted(held_roles(self.store, user))),  # at the submit; the
+                # roles held at the claim come from the slot (labels.roles_at_claim)
                 label=label,
                 shown=shown,
                 label_task=task.ref,
@@ -770,11 +771,17 @@ def _checked_label(task: Any, label: Any) -> dict[str, Any]:
     if not isinstance(label, dict):
         raise InvalidLabel([f"a label must be a JSON object, not {type(label).__name__}"])
     try:
-        return task.validate(_JSON_DICT.validate_python(label))
+        plain = _JSON_DICT.validate_python(label)
     except ValidationError:
         raise InvalidLabel(["the label must contain only JSON values"]) from None
-    except LabelValidationError as error:
-        raise InvalidLabel(error.problems) from error
+
+    def validate() -> dict[str, Any]:
+        try:
+            return task.validate(plain)
+        except LabelValidationError as error:
+            raise InvalidLabel(error.problems) from error
+
+    return ask_task(task, "validating the label", validate)
 
 
 def _config_hash(data: Mapping[str, Any]) -> str:

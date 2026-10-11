@@ -304,6 +304,7 @@ def check_invariants(engine: Engine, workflows: list[str]) -> None:
     # From the log: no slot is claimed while claimed, nor while paused; a claimant held a
     # stage role then.
     state: dict[int, str] = {}
+    claim_roles: dict[int, list[str]] = {}
     paused: set[tuple[str, str | None]] = set()
     for e in events:
         if e.type in ("workflow_paused", "stage_paused"):
@@ -317,6 +318,7 @@ def check_invariants(engine: Engine, workflows: list[str]) -> None:
             assert state[e.slot] == "open", f"slot {e.slot} claimed twice"
             assert not {(e.workflow, None), (e.workflow, e.stage)} & paused, "claimed in a pause"
             state[e.slot] = "claimed"
+            claim_roles[e.slot] = list(e.roles)
             config = WorkflowConfig.model_validate(
                 config_for(e.workflow.split("_", 1)[1], e.workflow)
             )
@@ -331,6 +333,16 @@ def check_invariants(engine: Engine, workflows: list[str]) -> None:
             for slot in e.slots if e.type == "slots_cancelled" else e.cancelled_slots:
                 assert state[slot] in ("open", "claimed")
                 state[slot] = "cancelled"
+
+    # The roles held at the (latest) claim are kept on the slot while it is claimed or
+    # filled, and on the label; a role change after the claim does not touch them.
+    for slot in store.select("slots"):
+        if slot["status"] in ("claimed", "filled"):
+            assert slot["claimed_roles"] == claim_roles[slot["slot"]]
+        else:
+            assert slot["claimed_roles"] is None
+    for label in store.select("labels"):
+        assert label["roles_at_claim"] == claim_roles[label["slot"]]
 
 
 @settings(

@@ -147,6 +147,8 @@ SCHEMA: tuple[Table, ...] = (
         },
     ),
     # status: open, claimed, filled or cancelled.
+    # claimed_roles: every role the claimant held at the moment of the claim (a list), kept
+    # while the slot is claimed or filled; None while it is open or once it is cancelled.
     Table(
         "slots",
         key=("slot",),
@@ -160,6 +162,7 @@ SCHEMA: tuple[Table, ...] = (
             "status": "str",
             "claimed_by": "str?",
             "claimed_at": "time?",
+            "claimed_roles": "json?",
             "label": "int?",
             "config_version": "int",
             "admitted_seq": "int",
@@ -180,6 +183,9 @@ SCHEMA: tuple[Table, ...] = (
             "at": "time",
         },
     ),
+    # roles: the roles the labeler held when submitting. roles_at_claim: the roles they held
+    # when they claimed the slot (the ones eligibility was checked against; a role revoked
+    # between the claim and the submit shows up only here).
     Table(
         "labels",
         key=("label",),
@@ -191,6 +197,7 @@ SCHEMA: tuple[Table, ...] = (
             "slot": "int",
             "user": "str",
             "roles": "json",
+            "roles_at_claim": "json?",
             "config_version": "int",
             "value": "json",
             "shown_content_hash": "str",

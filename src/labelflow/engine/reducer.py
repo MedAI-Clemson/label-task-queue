@@ -172,6 +172,7 @@ def _admission_decided(tables: Tables, e: ev.AdmissionDecided) -> None:
                 "status": "open",
                 "claimed_by": None,
                 "claimed_at": None,
+                "claimed_roles": None,
                 "label": None,
                 "config_version": e.config_version,
                 "admitted_seq": e.seq,
@@ -185,13 +186,20 @@ def _slot_claimed(tables: Tables, e: ev.SlotClaimed) -> None:
     tables.update(
         "slots",
         {"slot": e.slot},
-        {"status": "claimed", "claimed_by": e.user, "claimed_at": _time(e)},
+        {
+            "status": "claimed",
+            "claimed_by": e.user,
+            "claimed_at": _time(e),
+            "claimed_roles": list(e.roles),
+        },
     )
 
 
 def _slot_released(tables: Tables, e: ev.SlotReleased) -> None:
     tables.update(
-        "slots", {"slot": e.slot}, {"status": "open", "claimed_by": None, "claimed_at": None}
+        "slots",
+        {"slot": e.slot},
+        {"status": "open", "claimed_by": None, "claimed_at": None, "claimed_roles": None},
     )
     tables.insert(
         "releases",
@@ -220,6 +228,7 @@ def _label_submitted(tables: Tables, e: ev.LabelSubmitted) -> None:
             "slot": e.slot,
             "user": e.user,
             "roles": list(e.roles),
+            "roles_at_claim": slot["claimed_roles"] if slot else None,
             "config_version": e.config_version,
             "value": e.label,
             "shown_content_hash": e.shown.content_hash,
@@ -293,7 +302,13 @@ def _cancel(tables: Tables, slots: tuple[int, ...], seq: int) -> None:
         tables.update(
             "slots",
             {"slot": slot},
-            {"status": "cancelled", "claimed_by": None, "claimed_at": None, "closed_seq": seq},
+            {
+                "status": "cancelled",
+                "claimed_by": None,
+                "claimed_at": None,
+                "claimed_roles": None,
+                "closed_seq": seq,
+            },
         )
 
 

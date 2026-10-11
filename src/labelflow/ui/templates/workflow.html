@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}{{ workflow.workflow }} · label-task-queue{% endblock %}
+{% block content %}
+<p class="crumbs"><a href="{{ root }}/">Home</a> › project {{ project }}</p>
+<h1>Workflow {{ workflow.workflow }}</h1>
+<p class="muted">Dataset {{ workflow.dataset }} · label task {{ workflow.label_task }} · config version {{ workflow.active_version }}
+  {% if workflow.paused %}· <strong>paused</strong> by {{ workflow.paused.by }}: {{ workflow.paused.reason }}{% endif %}</p>
+<table class="list">
+  <thead><tr><th>Stage</th><th>Roles</th><th>State</th></tr></thead>
+  <tbody>
+  {% for stage in workflow.stages %}
+    <tr>
+      <td>{{ stage.name }}</td>
+      <td>{{ stage.roles | join(", ") }}{% for r in stage.roles if r in my_roles %} <span class="tag">yours</span>{% endfor %}</td>
+      <td>{% if stage.paused %}paused by {{ stage.paused.by }}: {{ stage.paused.reason }}{% else %}open{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+<section class="card">
+  {% if held %}
+    <p>You hold slot {{ held }} in this workflow.</p>
+    <a class="button" href="{{ root }}/projects/{{ project }}/workflows/{{ workflow.workflow }}/slots/{{ held }}">Continue labeling</a>
+  {% else %}
+    <p>{{ waiting }} open slot{{ "" if waiting == 1 else "s" }} you could claim now.</p>
+    <form method="post" action="{{ root }}/projects/{{ project }}/workflows/{{ workflow.workflow }}/next">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button type="submit">Get work</button>
+    </form>
+  {% endif %}
+</section>
+{% endblock %}

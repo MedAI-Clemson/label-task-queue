@@ -50,7 +50,7 @@ def test_export_labels_one_row_per_label(build, cfg, work):
         (3, "dr_smith", "adjudicate"),
     ]
     expert = rows[2]
-    assert json.loads(expert["roles"]) == ["expert"]
+    assert json.loads(expert["roles"]) == json.loads(expert["roles_at_claim"]) == ["expert"]
     assert json.loads(expert["shown_prior_ids"]) == [1, 2]
     assert expert["show_prior"] is True and expert["shown_consensus_rule"] == "equal-values@1"
     assert (expert["config_version"], expert["ontology_version"]) == (1, "standin-ontology@1")

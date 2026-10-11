@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Explain {{ item }} · label-task-queue{% endblock %}
+{% block content %}
+<p class="crumbs"><a href="{{ root }}/admin/projects">Projects</a> › <a href="{{ root }}/admin/projects/{{ project }}">{{ project }}</a> › <a href="{{ root }}/admin/projects/{{ project }}/workflows/{{ workflow }}">{{ workflow }}</a></p>
+<h1>Explain an item</h1>
+<form method="get" action="{{ root }}/admin/projects/{{ project }}/workflows/{{ workflow }}/explain" class="row">
+  <label for="explain-item">Item id</label>
+  <input id="explain-item" name="item" value="{{ item }}" required>
+  <button type="submit">Explain</button>
+</form>
+{% if explanation %}
+<section class="card">
+  <h2>{{ explanation.item }} <span class="tag">{{ explanation.status }}</span></h2>
+  <p class="muted">{{ explanation.uri }} · content hash <code>{{ explanation.content_hash[:16] }}…</code></p>
+  {% if explanation.final %}
+  <p><strong>{{ "Final label" if explanation.final.status == "final" else explanation.final.status }}</strong> from {{ explanation.final.source_stage or "no stage" }} (labels {{ explanation.final.label_ids | join(", ") }}, config v{{ explanation.final.config_version }}): {{ explanation.final.rule }}</p>
+  {% endif %}
+  <table class="list">
+    <thead><tr><th>When (UTC)</th><th>Event</th><th>What</th><th>Because</th></tr></thead>
+    <tbody>
+    {% for e in explanation.trace %}
+      <tr><td>{{ e.at.strftime("%m-%d %H:%M") }}</td><td>{{ e.type }}</td><td>{{ e.summary }}</td><td>{{ e.because }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% if explanation.waiting %}
+  <h3>Waiting</h3>
+  <ul>{% for w in explanation.waiting %}<li>Slot {{ w.slot }} in {{ w.stage }}: {{ w.reason }}</li>{% endfor %}</ul>
+  {% endif %}
+  <details><summary>As text</summary><pre class="report">{{ text }}</pre></details>
+</section>
+{% endif %}
+{% endblock %}

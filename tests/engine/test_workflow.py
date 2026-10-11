@@ -237,6 +237,36 @@ def test_roles_are_checked_at_the_moment_of_the_claim(build, cfg):
     assert engine.request_work("wf", "dr_smith").stage == "annotate"
 
 
+def test_a_label_records_the_roles_held_at_the_claim(build, cfg):
+    """A held claim survives a role change, and the label says which roles made the
+    labeler eligible: the ones held at the claim, not the ones left at the submit."""
+    engine = build(cfg(ANNOTATE))
+    slot = engine.request_work("wf", "ana")
+    assert engine.store.get("slots", slot=slot.slot)["claimed_roles"] == ["annotator"]
+    engine.revoke_role("ana", "annotator", "admin", "on leave")
+    packet = engine.work_packet("wf", slot.slot, "ana")
+    label_id = engine.submit("wf", slot.slot, "ana", {"value": "cat"}, packet.shown())
+    row = engine.store.get("labels", label=label_id)
+    assert (row["roles_at_claim"], row["roles"]) == (["annotator"], [])
+    assert engine.store.get("slots", slot=slot.slot)["claimed_roles"] == ["annotator"]
+    exported = engine.export_labels("wf")[0]
+    assert (exported["roles_at_claim"], exported["roles"]) == ('["annotator"]', "[]")
+    assert rebuild(engine.store.events()).snapshot() == engine.store.snapshot()
+
+
+def test_claimed_roles_follow_the_claim(build, cfg):
+    grants = {"ana": ("annotator",), "ben": ("annotator", "expert")}
+    engine = build(cfg(ANNOTATE), items=2, grants=grants)
+    slot = engine.request_work("wf", "ana")
+    engine.release("wf", slot.slot, "ana", "later")
+    assert engine.store.get("slots", slot=slot.slot)["claimed_roles"] is None
+    engine.claim("wf", slot.slot, "ben")
+    assert engine.store.get("slots", slot=slot.slot)["claimed_roles"] == ["annotator", "expert"]
+    engine.exclude_item("wf", slot.item, "admin", "unreadable")
+    assert engine.store.get("slots", slot=slot.slot)["claimed_roles"] is None
+    assert rebuild(engine.store.events()).snapshot() == engine.store.snapshot()
+
+
 def test_claim_a_particular_slot(build, cfg, work):
     engine = build(cfg(DOUBLE), items=2)
     slot = engine.claim("wf", 3, "ana")
@@ -290,6 +320,49 @@ def test_blind_stage_shows_nothing_earlier(build, cfg, work):
     shown = packet.shown().model_copy(update={"prior_label_ids": (1,), "show_prior": True})
     with pytest.raises(InvalidShown, match="blind"):
         engine.submit("wf", slot.slot, "dr_smith", {"value": "cat"}, shown)
+    # Claiming to have been offered earlier labels, even without naming any, is refused too.
+    with pytest.raises(InvalidShown, match="blind .* but the interface reports show_prior: true"):
+        engine.submit(
+            "wf", slot.slot, "dr_smith", {"value": "cat"}, packet.shown().model_copy(update={"show_prior": True})
+        )
+
+
+def test_labels_of_the_same_stage_cannot_have_been_shown(build, cfg, work):
+    engine = build(cfg(DOUBLE), items=1)
+    _, first = work(engine, "wf", "ana", "cat")
+    slot = engine.request_work("wf", "ben")
+    packet = engine.work_packet("wf", slot.slot, "ben")
+    assert packet.show_prior and packet.prior_labels == ()  # the packet never shows them
+    shown = packet.shown().model_copy(update={"prior_label_ids": (first,)})
+    with pytest.raises(InvalidShown, match="Label\\(s\\) 1 are labels of annotate itself"):
+        engine.submit("wf", slot.slot, "ben", {"value": "dog"}, shown)
+    assert engine.slot("wf", slot.slot).claimed_by == "ben"
+
+
+def test_an_edit_that_shows_earlier_labels_after_the_claim_accepts_either_report(build, cfg, work):
+    """The packet may be fetched on either side of the edit, so both reports are honest."""
+    blind = {"name": "review", "input": "annotate", "assign_to": "expert", "show_prior": False}
+    engine = build(cfg(ANNOTATE, blind, final=["review", "annotate"]), items=2)
+    work(engine, "wf", "ana")  # label 1 on img_001
+    work(engine, "wf", "ana")  # label 2 on img_002
+    slot = engine.request_work("wf", "dr_smith")
+    blind_packet = engine.work_packet("wf", slot.slot, "dr_smith")
+    assert not blind_packet.show_prior
+    engine.activate_edit(
+        "wf", cfg(ANNOTATE, {**blind, "show_prior": True}, final=["review", "annotate"]), "admin", 1
+    )
+    open_packet = engine.work_packet("wf", slot.slot, "dr_smith")
+    assert open_packet.show_prior and [p.label for p in open_packet.prior_labels] == [1]
+    with pytest.raises(InvalidShown, match="not labels of item img_001"):
+        shown = open_packet.shown().model_copy(update={"prior_label_ids": (2,)})
+        engine.submit("wf", slot.slot, "dr_smith", {"value": "cat"}, shown)
+    engine.submit("wf", slot.slot, "dr_smith", {"value": "cat"}, open_packet.shown())
+    slot = engine.request_work("wf", "dr_jones")  # claimed after the edit: must report true
+    with pytest.raises(InvalidShown, match="offers earlier labels .* reports show_prior: false"):
+        engine.submit("wf", slot.slot, "dr_jones", {"value": "cat"}, blind_packet.shown().model_copy(update={"content_hash": "sha-002"}))
+    # The slot claimed before the edit could have reported the blind packet as well.
+    engine.release("wf", slot.slot, "dr_jones", "checking")
+    assert engine.store.get("labels", label=3)["show_prior"] is True
 
 
 def test_work_packet_is_only_for_the_claimant(build, cfg):
@@ -353,6 +426,7 @@ def test_an_invalid_label_is_rejected_without_an_event(build, cfg, label, proble
         ({"content_hash": "sha-999", "show_prior": True}, "has content hash sha-001"),
         ({"content_hash": "sha-001", "show_prior": True, "prior_label_ids": [2]}, "not labels"),
         ({"content_hash": "sha-001", "show_prior": False, "prior_label_ids": [1]}, "show_prior"),
+        ({"content_hash": "sha-001", "show_prior": False}, "reports show_prior: false"),
         (
             {"content_hash": "sha-001", "show_prior": True, "consensus_rule_version": "x@1"},
             "No consensus check",

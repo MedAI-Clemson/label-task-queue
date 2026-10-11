@@ -7,10 +7,10 @@ from typing import Annotated, Any, Literal
 from fastapi import APIRouter, Query, Response
 from pydantic import BaseModel, Field
 
-from labelflow.api import reads, tabular
+from labelflow.api import tabular
 from labelflow.api.deps import AdminProject
 from labelflow.api.errors import errors
-from labelflow.engine import Explanation
+from labelflow.engine import Event, Explanation, Page
 
 router = APIRouter(
     prefix="/projects/{project}",
@@ -52,16 +52,6 @@ class SamplingRow(BaseModel):
     admitted: int = Field(description="Of those, items that were admitted.")
     rate: float | None = Field(description="admitted / arrived: the sampling rate in fact.")
     slots: int = Field(description="Slots opened for these arrivals.")
-
-
-class EventPage(BaseModel):
-    total: int = Field(description="How many events match.")
-    limit: int = Field(description="The page size asked for.")
-    offset: int = Field(description="How many events were skipped.")
-    events: list[dict[str, Any]] = Field(
-        description="This page of events, oldest first. Each has its type, time, who, the "
-        "workflow, stage and item it is about, and `because`: the rule that caused it."
-    )
 
 
 @router.get(
@@ -144,7 +134,7 @@ def export_labels(workflow: str, ctx: AdminProject, format: Format = "csv") -> R
     return _file(rows, tabular.LABEL_COLUMNS, f"{workflow}_labels", format)
 
 
-@router.get("/events", response_model=EventPage, summary="Audit view of the event log")
+@router.get("/events", response_model=Page[Event], summary="Audit view of the event log")
 def list_events(
     ctx: AdminProject,
     limit: Annotated[int, Query(ge=1, le=500, description="How many events to return.")] = 100,
@@ -154,8 +144,9 @@ def list_events(
     type: Annotated[
         str | None, Query(description="Only events of this type, such as `label_submitted`.")
     ] = None,
-) -> EventPage:
+) -> Page[Event]:
     """Read the project's event log, oldest first, one page at a time. Every change in the
-    project is an event: role changes, imports, claims, labels, edits and exclusions."""
-    total, events = reads.audit(ctx.db, ctx.name, limit, offset, workflow, item, type)
-    return EventPage(total=total, limit=limit, offset=offset, events=events)
+    project is an event: role changes, imports, claims, labels, edits and exclusions. Each
+    has its type, time, who did it, what it is about, and `because`: the rule that caused
+    it."""
+    return ctx.engine.events(offset, limit, workflow=workflow, item=item, type=type)

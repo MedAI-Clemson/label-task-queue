@@ -1,15 +1,23 @@
 """Deployment settings, read from environment variables.
 
-=====================  =========================  ==========================================
-Variable               Default                    Meaning
-=====================  =========================  ==========================================
-``DATABASE_URI``       ``sqlite:///./db/labelflow.db``  The SQLite database.
-``LABELFLOW_LABEL_TASKS``    ``./ontologies``           Folder of ontology files (label tasks).
-``LABELFLOW_MEDIA_ROOT``     (not set)                  Folder the server may read images from,
-                                                  to hash them at import.
-``LABELFLOW_SESSION_HOURS``  ``12``                     How long a login lasts.
-``LABELFLOW_COOKIE_SECURE``  ``false``                  Mark the login cookie "https only".
-=====================  =========================  ==========================================
+==============================  =============================  =================================
+Variable                        Default                        Meaning
+==============================  =============================  =================================
+``DATABASE_URI``                ``sqlite:///./db/labelflow.db``  The SQLite database.
+``LABELFLOW_LABEL_TASKS``       ``./ontologies``               Folder of ontology files.
+``LABELFLOW_MEDIA_ROOT``        (not set)                      Folder the server may read
+                                                               images from, to hash them at
+                                                               import. Unset: every imported
+                                                               item must bring its hash.
+``LABELFLOW_SESSION_HOURS``     ``12``                         How long a login lasts.
+``LABELFLOW_COOKIE_SECURE``     ``false``                      Mark the login cookie
+                                                               "https only".
+``LABELFLOW_MAX_REQUEST_MB``    ``20``                         Largest request body accepted.
+``LABELFLOW_MAX_IMPORT_ITEMS``  ``10000``                      Most items in one import batch.
+``LABELFLOW_MAX_PROPERTIES_KB`` ``256``                        Largest ``properties`` of one
+                                                               item, as JSON.
+``LABELFLOW_MAX_LABEL_KB``      ``4096``                       Largest label, as JSON.
+==============================  =============================  =================================
 
 ``LABELFLOW_SQLITE_SYNCHRONOUS`` (default ``FULL``) is SQLite's durability setting; leave it alone
 except for experiments.
@@ -24,6 +32,9 @@ from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
 
+KB = 1024
+MB = 1024 * KB
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -32,6 +43,10 @@ class Settings:
     media_root: Path | None = None
     session_hours: float = 12.0
     cookie_secure: bool = False
+    max_request_bytes: int = 20 * MB
+    max_import_items: int = 10_000
+    max_properties_bytes: int = 256 * KB
+    max_label_bytes: int = 4096 * KB
     sqlite_synchronous: str = "FULL"
     password_cost: int = 14
     """log2 of scrypt's CPU/memory cost. Only tests lower it; it is not an environment setting."""
@@ -39,6 +54,14 @@ class Settings:
     def __post_init__(self) -> None:
         if not math.isfinite(self.session_hours) or self.session_hours <= 0:
             raise ValueError("The session lifetime must be a positive number of hours.")
+        for name in (
+            "max_request_bytes",
+            "max_import_items",
+            "max_properties_bytes",
+            "max_label_bytes",
+        ):
+            if getattr(self, name) < 1:
+                raise ValueError(f"{name} must be a positive number.")
 
     @property
     def session_lifetime(self) -> timedelta:
@@ -56,6 +79,14 @@ class Settings:
             media_root=Path(media) if media else None,
             session_hours=_number(env, "LABELFLOW_SESSION_HOURS", defaults.session_hours),
             cookie_secure=_flag(env, "LABELFLOW_COOKIE_SECURE", defaults.cookie_secure),
+            max_request_bytes=_whole(
+                env, "LABELFLOW_MAX_REQUEST_MB", defaults.max_request_bytes, MB
+            ),
+            max_import_items=_whole(env, "LABELFLOW_MAX_IMPORT_ITEMS", defaults.max_import_items),
+            max_properties_bytes=_whole(
+                env, "LABELFLOW_MAX_PROPERTIES_KB", defaults.max_properties_bytes, KB
+            ),
+            max_label_bytes=_whole(env, "LABELFLOW_MAX_LABEL_KB", defaults.max_label_bytes, KB),
             sqlite_synchronous=(
                 env.get("LABELFLOW_SQLITE_SYNCHRONOUS", "").strip() or defaults.sqlite_synchronous
             ),
@@ -73,6 +104,16 @@ def _number(env: Mapping[str, str], name: str, default: float) -> float:
     if not math.isfinite(value) or value <= 0:
         raise ValueError(f"{name} must be a positive number, not {text!r}.")
     return value
+
+
+def _whole(env: Mapping[str, str], name: str, default: int, unit: int = 1) -> int:
+    """A positive whole number, given in ``unit``s (the default is in the base unit)."""
+    text = env.get(name, "").strip()
+    if not text:
+        return default
+    if not text.isdigit() or int(text) < 1:
+        raise ValueError(f"{name} must be a positive whole number, not {text!r}.")
+    return int(text) * unit
 
 
 def _flag(env: Mapping[str, str], name: str, default: bool) -> bool:

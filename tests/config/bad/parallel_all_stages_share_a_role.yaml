@@ -1,0 +1,14 @@
+workflow: two_reads
+dataset: xray_batch_1
+label_task: image_ontology@1
+
+stages:
+  - name: a
+    assign_to: expert
+    labels_per_item: all
+
+  - name: b
+    assign_to: expert
+    labels_per_item: all
+
+final: none

@@ -343,6 +343,93 @@ def test_too_few_holders_warns(stage_keys, roles, said):
     assert said in warning.message
 
 
+def parallel_config(first_keys, second_keys, **more):
+    """Two root stages (so they can hold an item together) with the given keys."""
+    return WorkflowConfig.model_validate(
+        {
+            "workflow": "w",
+            "dataset": "d",
+            "label_task": "t@1",
+            "stages": [{"name": "first", **first_keys}, {"name": "second", **second_keys}],
+            "final": "none",
+            **more,
+        }
+    )
+
+
+def test_parallel_stages_sharing_a_role_need_their_labels_added_up():
+    config = parallel_config(
+        {"assign_to": "expert", "labels_per_item": 2}, {"assign_to": "expert", "labels_per_item": 2}
+    )
+    # enough for each stage alone, but an item in both needs four different experts
+    [warning] = role_warnings(config, {"expert": ["a", "b", "c"]})
+    assert warning.where == "stage 'second'"
+    assert warning.message == (
+        "Stages 'first' and 'second' can both hold the same item at the same time, and both are "
+        "assigned to the role 'expert'. Together they need 4 different people for such an item "
+        "(2 for 'first' and 2 for 'second'), but only 3 people hold the role 'expert'. Some "
+        "items will wait for another person, because nobody labels the same item twice. Give "
+        "the role 'expert' to more people, or lower `labels_per_item`."
+    )
+    assert role_warnings(config, {"expert": ["a", "b", "c", "d"]}) == []
+
+
+def test_a_fraction_counts_its_count_in_a_parallel_pair():
+    config = parallel_config(
+        {"assign_to": "expert"},
+        {"assign_to": ["expert", "lead"], "labels_per_item": {"count": 2, "fraction": 0.1}},
+    )
+    [warning] = role_warnings(config, {"expert": ["a"], "lead": ["a", "b"]})
+    assert (
+        "(1 for 'first' and up to 2 for 'second'), but only 2 people hold any of their roles"
+        in (warning.message)
+    )
+    assert role_warnings(config, {"expert": ["a"], "lead": ["b", "c"]}) == []
+
+
+def test_a_single_holder_in_a_parallel_pair():
+    config = parallel_config({"assign_to": "expert"}, {"assign_to": "expert"})
+    [warning] = role_warnings(config, {"expert": ["a"]})
+    assert "Together they need 2 different people" in warning.message
+    assert "but only 1 person holds the role 'expert'." in warning.message
+
+
+@pytest.mark.parametrize(
+    ("first_keys", "second_keys", "roles"),
+    [
+        # nobody at all: each stage already warns about that on its own
+        ({"assign_to": "expert"}, {"assign_to": "expert"}, {"expert": []}),
+        # no shared role
+        (
+            {"assign_to": "expert", "labels_per_item": 2},
+            {"assign_to": "lead"},
+            {"expert": ["a", "b"], "lead": ["a"]},
+        ),
+        # a role that does not exist is an error, reported by validate_config
+        ({"assign_to": "expert"}, {"assign_to": ["expert", "ghost"]}, {"expert": ["a"]}),
+    ],
+    ids=["nobody", "different_roles", "unknown_role"],
+)
+def test_parallel_pairs_that_get_no_pair_warning(first_keys, second_keys, roles):
+    warnings = role_warnings(parallel_config(first_keys, second_keys), roles)
+    assert all("Together" not in warning.message for warning in warnings)
+
+
+def test_chained_stages_sharing_a_role_get_no_pair_warning():
+    config = WorkflowConfig.model_validate(
+        {
+            "workflow": "w",
+            "dataset": "d",
+            "label_task": "t@1",
+            "stages": [
+                {"name": "first", "assign_to": "expert", "labels_per_item": 2},
+                {"name": "second", "input": "first", "assign_to": "expert", "labels_per_item": 2},
+            ],
+        }
+    )
+    assert role_warnings(config, {"expert": ["a", "b"]}) == []
+
+
 def test_each_stage_is_checked_in_order():
     config = WorkflowConfig.model_validate(
         {

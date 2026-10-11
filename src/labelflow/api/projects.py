@@ -1,6 +1,7 @@
 """The list of projects this deployment hosts.
 
-A project is a name; its roles, datasets and workflows live in the store under that name.
+A project is a name; its roles, datasets and workflows live in the store under that name
+and are reached through the project's engine (``Runtime.engine_for``).
 """
 
 from __future__ import annotations
@@ -24,6 +25,11 @@ class Project:
     created_at: datetime
 
 
+def unknown_project(name: str) -> NotFound:
+    """The one answer for a project that does not exist or that the caller may not see."""
+    return NotFound(f"There is no project named '{name}'.")
+
+
 class Projects:
     """Create and look up projects."""
 
@@ -31,7 +37,6 @@ class Projects:
         self.engine = engine
         self.clock = clock
         self._projects = db.table("projects")
-        self._assignments = db.table("role_assignments")
 
     def create(self, name: str, created_by: str | None) -> Project:
         if not re.fullmatch(NAME_PATTERN, name):
@@ -58,26 +63,13 @@ class Projects:
                 .first()
             )
         if row is None:
-            raise NotFound(f"There is no project named '{name}'.")
+            raise unknown_project(name)
         return _project(row)
 
     def list_all(self) -> list[Project]:
         with db.reading(self.engine) as connection:
             rows = connection.execute(sa.select(self._projects).order_by(self._projects.c.name))
             return [_project(row) for row in rows.mappings()]
-
-    def roles_of(self, user_id: str) -> dict[str, list[str]]:
-        """The roles a person holds now, by project name (only projects they hold one in)."""
-        query = (
-            sa.select(self._assignments.c.project, self._assignments.c.role)
-            .where(self._assignments.c.user == user_id, self._assignments.c.active.is_(True))
-            .order_by(self._assignments.c.project, self._assignments.c.role)
-        )
-        held: dict[str, list[str]] = {}
-        with db.reading(self.engine) as connection:
-            for project, role in connection.execute(query):
-                held.setdefault(project, []).append(role)
-        return held
 
     def _exists(self, connection: sa.Connection, name: str) -> bool:
         query = sa.select(self._projects.c.name).where(self._projects.c.name == name)

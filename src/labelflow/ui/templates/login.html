@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Log in · label-task-queue{% endblock %}
+{% block mainclass %}page narrow{% endblock %}
+{% block content %}
+<h1>Log in</h1>
+<form method="post" action="{{ root }}/login" class="stack">
+  <input type="hidden" name="next" value="{{ next }}">
+  <label for="username">Username</label>
+  <input id="username" name="username" autocomplete="username" required autofocus>
+  <label for="password">Password</label>
+  <input id="password" name="password" type="password" autocomplete="current-password" required>
+  <button type="submit">Log in</button>
+</form>
+<p class="muted">Accounts are created by an administrator; there is no sign-up.</p>
+{% endblock %}

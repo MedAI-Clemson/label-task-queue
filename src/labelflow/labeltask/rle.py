@@ -20,6 +20,13 @@ each number is written in groups of 5 bits, one character per group (character c
 the group, plus 32 when more groups follow), and from the fourth number on, each number is
 stored as the difference from the number two places before it. Masks written here can be read
 by COCO tools, and the other way round.
+
+A mask is small to send but can be huge to decode: seven characters can claim a size of
+100000 x 100000, and decoding that would need 10 gigabytes. So a mask's size is capped
+(``MAX_SIDE`` on each side and ``max_pixels`` in all, ``MAX_PIXELS`` by default), and the
+number of runs is capped at one more than the pixels, which is the most any mask can have.
+Agreement between two masks is computed from their run lists (``counts_iou``), without
+decoding either.
 """
 
 from __future__ import annotations
@@ -34,9 +41,26 @@ from labelflow.labeltask.base import describe_kind
 RLE = dict[str, Any]
 """A mask as ``{"size": [height, width], "counts": list or string}``."""
 
+MAX_SIDE = 16_384
+"""The most pixels a mask may have on either side.
+
+16384 is the largest canvas every major browser can draw, so a mask any wider or taller
+could never be shown in the labeling interface, whatever the memory of the server.
+"""
+
+MAX_PIXELS = 64 * 1024 * 1024
+"""The default cap on a mask's pixels (height x width): 64 megapixels, or 8192 x 8192.
+
+That is above any 2-D medical image labeled whole (a digital mammogram is about 24
+megapixels), and a decoded mask of that size is 64 MB, so a handful of masks per request
+fits comfortably in memory. An ontology may set its own cap (``max_mask_pixels``).
+"""
+
 _FIRST_CODE = 48  # the character code of the lowest compressed digit
 _CONTINUE_BIT = 0x20  # more 5-bit groups follow
 _SIGN_BIT = 0x10  # the top bit of the last 5-bit group says the number is negative
+# 13 groups of 5 bits hold any 64-bit number, and COCO tools never write a longer one.
+_MAX_CHARACTERS_PER_NUMBER = 13
 
 
 class RLEError(ValueError):
@@ -67,16 +91,36 @@ def counts_to_string(counts: Sequence[int]) -> str:
     return "".join(characters)
 
 
-def counts_from_string(text: str) -> list[int]:
-    """Read run lengths from the COCO compressed form (``rleFrString``). Raises RLEError."""
+def counts_from_string(text: str, max_runs: int | None = None) -> list[int]:
+    """Read run lengths from the COCO compressed form (``rleFrString``). Raises RLEError.
+
+    With ``max_runs``, reading stops with an error as soon as the string holds more runs
+    than that (or is too long to be worth reading), so a huge string costs no memory.
+    """
+    if max_runs is not None and len(text) > max_runs * _MAX_CHARACTERS_PER_NUMBER:
+        raise RLEError(
+            [
+                f"'counts' is {len(text)} characters long, which is longer than the counts "
+                f"of any mask with at most {max_runs - 1} pixels can be"
+            ]
+        )
     counts: list[int] = []
     position = 0
     while position < len(text):
         number = 0
         shift = 0
+        start = position
         while True:
             if position >= len(text):
                 raise RLEError(["'counts' ends in the middle of a number"])
+            if position - start >= _MAX_CHARACTERS_PER_NUMBER:
+                raise RLEError(
+                    [
+                        f"'counts' has a number written with more than "
+                        f"{_MAX_CHARACTERS_PER_NUMBER} characters (from position {start + 1}), "
+                        "which compressed COCO counts never need"
+                    ]
+                )
             code = ord(text[position]) - _FIRST_CODE
             if not 0 <= code < 64:
                 raise RLEError(
@@ -97,29 +141,45 @@ def counts_from_string(text: str) -> list[int]:
         if number < 0:
             raise RLEError([f"'counts' has a negative run length at entry {len(counts) + 1}"])
         counts.append(number)
+        if max_runs is not None and len(counts) > max_runs:
+            raise RLEError([_too_many_runs(max_runs)])
     return counts
+
+
+def _too_many_runs(max_runs: int) -> str:
+    return (
+        f"'counts' lists more than {max_runs} runs, but a mask can have at most one more run "
+        "than it has pixels"
+    )
 
 
 # --- Checking a mask ----------------------------------------------------------------------
 
 
-def problems(rle: object) -> list[str]:
+def problems(rle: object, max_pixels: int = MAX_PIXELS) -> list[str]:
     """Everything wrong with ``rle`` as a mask, in plain language; empty if it is valid.
 
     The messages are phrases such as ``"'size' must be ..."``, meant to follow a lead-in like
-    "Mask 'lung' is not a valid COCO RLE:".
+    "Mask 'lung' is not a valid COCO RLE:". ``max_pixels`` caps the mask's height x width.
     """
-    return _check(rle)[0]
+    return _check(rle, max_pixels)[0]
 
 
-def validate(rle: object) -> None:
+def validate(rle: object, max_pixels: int = MAX_PIXELS) -> None:
     """Raise RLEError if ``rle`` is not a valid mask. The mask itself is not changed."""
-    if found := problems(rle):
+    if found := problems(rle, max_pixels):
         raise RLEError(found)
 
 
-def _check(rle: object) -> tuple[list[str], tuple[int, int] | None, list[int] | None]:
-    """Return ``(problems, size, run lengths)``; size or run lengths are None if unreadable."""
+def _check(
+    rle: object, max_pixels: int = MAX_PIXELS
+) -> tuple[list[str], tuple[int, int] | None, list[int] | None]:
+    """Return ``(problems, size, run lengths)``; size or run lengths are None if unreadable.
+
+    Nothing here costs more than the size of the input: the size is checked against the
+    caps before the runs are read, and the runs are read only up to the number a mask of
+    that size can have.
+    """
     if not isinstance(rle, dict):
         kind = describe_kind(rle)
         return [f"it must be an object with 'size' and 'counts', not {kind}"], None, None
@@ -131,18 +191,23 @@ def _check(rle: object) -> tuple[list[str], tuple[int, int] | None, list[int] | 
     size = counts = None
     if "size" not in rle:
         found.append("it has no 'size' (give [height, width])")
-    elif _is_size(rle["size"]):
-        size = (rle["size"][0], rle["size"][1])
-    else:
+    elif not _is_size(rle["size"]):
         found.append(
             "'size' must be two whole numbers [height, width], each at least 1, "
             f"not {rle['size']!r}"
         )
+    elif too_big := _size_problem(rle["size"][0], rle["size"][1], max_pixels):
+        found.append(too_big)
+    else:
+        size = (rle["size"][0], rle["size"][1])
+    # A mask has at most one more run than pixels (when every pixel differs from the next
+    # and the first is foreground); without a usable size, the cap stands in for the pixels.
+    max_runs = (size[0] * size[1] if size else max_pixels) + 1
     if "counts" not in rle:
         found.append("it has no 'counts'")
     else:
         try:
-            counts = _read_counts(rle["counts"])
+            counts = _read_counts(rle["counts"], max_runs)
         except RLEError as error:
             found += error.problems
     if size and counts is not None and sum(counts) != size[0] * size[1]:
@@ -161,11 +226,29 @@ def _is_size(size: object) -> bool:
     )
 
 
-def _read_counts(counts: object) -> list[int]:
+def _size_problem(height: int, width: int, max_pixels: int) -> str | None:
+    """Why a mask of this size is too big to handle, or None if it is within the caps."""
+    if height > MAX_SIDE or width > MAX_SIDE:
+        return (
+            f"'size' is {height} x {width}, but a mask can be at most {MAX_SIDE} pixels "
+            "high and wide"
+        )
+    if height * width > max_pixels:
+        about = " (about 8192 x 8192)" if max_pixels == MAX_PIXELS else ""
+        return (
+            f"'size' is {height} x {width}, which is {height * width} pixels, but a mask "
+            f"can have at most {max_pixels} pixels{about}"
+        )
+    return None
+
+
+def _read_counts(counts: object, max_runs: int) -> list[int]:
     """The run lengths from either form of ``counts``, or an RLEError saying what is wrong."""
     if isinstance(counts, str):
-        return counts_from_string(counts)
+        return counts_from_string(counts, max_runs)
     if isinstance(counts, list | tuple):
+        if len(counts) > max_runs:
+            raise RLEError([_too_many_runs(max_runs)])
         if all(_is_whole_number(count) and count >= 0 for count in counts):
             return list(counts)
         raise RLEError(["'counts' must contain only whole numbers that are 0 or more"])
@@ -177,9 +260,9 @@ def _is_whole_number(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
-def _parse(rle: object) -> tuple[tuple[int, int], list[int]]:
+def _parse(rle: object, max_pixels: int = MAX_PIXELS) -> tuple[tuple[int, int], list[int]]:
     """Return the size and the run lengths of a valid mask, or raise RLEError."""
-    found, size, counts = _check(rle)
+    found, size, counts = _check(rle, max_pixels)
     if found or size is None or counts is None:
         raise RLEError(found)
     return size, counts
@@ -209,34 +292,100 @@ def encode(mask: np.ndarray, compressed: bool = True) -> RLE:
     }
 
 
-def decode(rle: RLE) -> np.ndarray:
-    """Decode a COCO RLE (either form) to a boolean array of shape (height, width)."""
-    (height, width), counts = _parse(rle)
+def decode(rle: RLE, max_pixels: int = MAX_PIXELS) -> np.ndarray:
+    """Decode a COCO RLE (either form) to a boolean array of shape (height, width).
+
+    This is the one operation that needs memory for every pixel, so the mask must be
+    within ``max_pixels`` (and ``MAX_SIDE`` on each side); a bigger one raises RLEError.
+    """
+    (height, width), counts = _parse(rle, max_pixels)
     is_foreground = np.arange(len(counts)) % 2 == 1  # runs alternate, starting with background
     pixels = np.repeat(is_foreground, counts)
     return pixels.reshape((height, width), order="F")
 
 
-def area(rle: RLE) -> int:
+def area(rle: RLE, max_pixels: int = MAX_PIXELS) -> int:
     """The number of foreground pixels: the sum of every second run (``rleArea``)."""
-    _, counts = _parse(rle)
+    _, counts = _parse(rle, max_pixels)
     return sum(counts[1::2])
 
 
-def to_uncompressed(rle: RLE) -> RLE:
+def to_uncompressed(rle: RLE, max_pixels: int = MAX_PIXELS) -> RLE:
     """The same mask with ``counts`` as a list of run lengths. Returns a new dict."""
-    (height, width), counts = _parse(rle)
+    (height, width), counts = _parse(rle, max_pixels)
     return {"size": [height, width], "counts": counts}
 
 
-def to_compressed(rle: RLE) -> RLE:
+def to_compressed(rle: RLE, max_pixels: int = MAX_PIXELS) -> RLE:
     """The same mask with ``counts`` as the COCO compressed string. Returns a new dict."""
-    (height, width), counts = _parse(rle)
+    (height, width), counts = _parse(rle, max_pixels)
     return {"size": [height, width], "counts": counts_to_string(counts)}
 
 
+# --- Intersection over union --------------------------------------------------------------
+
+
+def iou(first: RLE, second: RLE, max_pixels: int = MAX_PIXELS) -> float:
+    """Intersection over union of two masks of the same size, straight from their runs.
+
+    Neither mask is decoded. Two empty masks have an IoU of 1.0 (they agree). An empty
+    mask and a non-empty one have 0. Raises RLEError for an invalid mask and ValueError
+    for masks of different sizes.
+    """
+    first_size, first_counts = _parse(first, max_pixels)
+    second_size, second_counts = _parse(second, max_pixels)
+    if first_size != second_size:
+        raise ValueError("Masks of different sizes cannot be compared.")
+    return counts_iou(first_counts, second_counts)
+
+
+def counts_iou(first: Sequence[int], second: Sequence[int]) -> float:
+    """Intersection over union of two masks given as run lengths over the same pixels.
+
+    The work grows with the number of runs, not the number of pixels, and nothing is
+    decoded: the intersection is the sum, over each foreground run of the first mask, of
+    how many foreground pixels of the second mask fall inside it, which a prefix sum over
+    the second mask's runs answers with one binary search per run end. The union follows
+    from the two areas. The result is exactly what ``mask_iou`` gives on the decoded masks.
+    """
+    first_edges = _run_edges(first)
+    second_edges = _run_edges(second)
+    if first_edges[-1] != second_edges[-1]:
+        raise ValueError("Masks of different sizes cannot be compared.")
+    first_area = int((first_edges[2::2] - first_edges[1:-1:2]).sum())  # the odd runs
+    covered = _foreground_before(second_edges)
+    intersection = int((covered(first_edges[2::2]) - covered(first_edges[1:-1:2])).sum())
+    second_area = int(covered(second_edges[-1:])[0])
+    union = first_area + second_area - intersection
+    if union == 0:
+        return 1.0
+    return intersection / union
+
+
+def _run_edges(counts: Sequence[int]) -> np.ndarray:
+    """Where each run starts: ``edges[i]`` to ``edges[i + 1]`` is run ``i`` (odd runs are on)."""
+    return np.concatenate(([0], np.cumsum(np.asarray(counts, dtype=np.int64))))
+
+
+def _foreground_before(edges: np.ndarray):
+    """A function giving, for sorted positions, the mask's foreground pixels before each."""
+    lengths = np.diff(edges)
+    lengths[::2] = 0  # only the odd runs are foreground
+    before_run = np.concatenate(([0], np.cumsum(lengths)))  # foreground pixels before run i
+
+    def covered(positions: np.ndarray) -> np.ndarray:
+        # The run holding a position is the last one starting at or before it; searching
+        # from the right skips any empty runs that start there too. Inside a foreground
+        # run, the pixels from its start up to the position count as well.
+        runs = np.searchsorted(edges, positions, side="right") - 1
+        inside = np.where(runs % 2 == 1, positions - edges[runs], 0)
+        return before_run[runs] + inside
+
+    return covered
+
+
 def mask_iou(first: np.ndarray, second: np.ndarray) -> float:
-    """Intersection over union of two boolean masks of the same shape.
+    """Intersection over union of two boolean masks of the same shape (the pixel reference).
 
     Two empty masks have an IoU of 1.0 (they agree). An empty mask and a non-empty one have 0.
     """

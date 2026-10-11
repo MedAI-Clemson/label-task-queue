@@ -10,7 +10,6 @@ from pydantic import BaseModel, Field
 
 from labelflow.api.deps import COOKIE, RuntimeDep, User, session_token
 from labelflow.api.errors import errors
-from labelflow.api.identity import Principal
 
 router = APIRouter(prefix="/auth", tags=["login"])
 
@@ -25,14 +24,6 @@ class UserOut(BaseModel):
     display_name: str = Field(description="The name shown to people.")
     is_admin: bool = Field(description="Whether this account administers every project.")
 
-    @classmethod
-    def of(cls, principal: Principal) -> UserOut:
-        return cls(
-            user_id=principal.user_id,
-            display_name=principal.display_name,
-            is_admin=principal.is_admin,
-        )
-
 
 class LoginOut(BaseModel):
     token: str = Field(
@@ -44,12 +35,7 @@ class LoginOut(BaseModel):
     user: UserOut = Field(description="The account that is now logged in.")
 
 
-@router.post(
-    "/login",
-    response_model=LoginOut,
-    summary="Log in",
-    responses=errors(401, 422),
-)
+@router.post("/login", response_model=LoginOut, summary="Log in", responses=errors(401, 422))
 def login(body: LoginIn, response: Response, runtime: RuntimeDep) -> LoginOut:
     """Check a username and password. On success you get a token to send with every later
     request, and the same token is set as a login cookie."""
@@ -68,7 +54,7 @@ def login(body: LoginIn, response: Response, runtime: RuntimeDep) -> LoginOut:
         token=result.token,
         token_type="bearer",
         expires_at=result.expires_at,
-        user=UserOut.of(result.principal),
+        user=UserOut(**vars(result.principal)),
     )
 
 
@@ -87,4 +73,4 @@ def logout(
 @router.get("/me", response_model=UserOut, summary="Who am I?", responses=errors(401))
 def me(user: User) -> UserOut:
     """Show the account you are logged in as."""
-    return UserOut.of(user)
+    return UserOut(**vars(user))

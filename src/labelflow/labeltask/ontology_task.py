@@ -8,7 +8,10 @@ required by the ontology where it says so::
                "effusion": {"size": [512, 512], "counts": [262144]}}}
 
 Masks are COCO RLE (see ``rle.py``), one per mask class. An empty mask is an RLE with no
-foreground, such as ``{"size": [512, 512], "counts": [262144]}``.
+foreground, such as ``{"size": [512, 512], "counts": [262144]}``. A mask may have at most
+``max_mask_pixels`` pixels (an ontology setting; 64 megapixels by default), so that a label
+can never make the server decode more than it has memory for. The consensus check compares
+masks by their run lists, without decoding them at all.
 
 Labels are stored exactly as submitted: ``validate`` checks a label and returns a copy of it,
 and never re-encodes or tidies it.
@@ -61,6 +64,7 @@ class OntologyLabelTask(LabelTask):
         self.version = ontology.version
         self._classifications = {item.name: item for item in ontology.classifications}
         self._mask_classes = {item.name: item for item in ontology.masks}
+        self._max_pixels = ontology.mask_pixel_cap
 
     @property
     def ontology_version(self) -> str:
@@ -132,7 +136,7 @@ class OntologyLabelTask(LabelTask):
         for name, mask in masks.items():
             if name not in self._mask_classes:
                 problems.append(self._unknown_name(name, "masks"))
-            elif found := rle.problems(mask):
+            elif found := rle.problems(mask, self._max_pixels):
                 lead_in = f"Mask {name!r} is not a valid COCO RLE"
                 problems += [f"{lead_in}: {problem}." for problem in found]
             else:
@@ -187,7 +191,10 @@ class OntologyLabelTask(LabelTask):
             item.name: _compare_classification(item, labels)
             for item in self.ontology.classifications
         }
-        masks = {item.name: _compare_masks(item, labels) for item in self.ontology.masks}
+        masks = {
+            item.name: _compare_masks(item, labels, self._max_pixels)
+            for item in self.ontology.masks
+        }
         agreed = all(field["agreed"] for field in (*classifications.values(), *masks.values()))
         return ConsensusResult(
             agreed=agreed,
@@ -212,7 +219,7 @@ def _compare_classification(item: Classification, labels: Sequence[Label]) -> di
     return {"agreed": all(value == values[0] for value in values), "values": values}
 
 
-def _compare_masks(item: MaskClass, labels: Sequence[Label]) -> dict[str, Any]:
+def _compare_masks(item: MaskClass, labels: Sequence[Label], max_pixels: int) -> dict[str, Any]:
     """Compare one mask class across labels.
 
     The result has ``agreed``, the class ``threshold``, ``min_iou`` (the lowest pairwise
@@ -220,13 +227,16 @@ def _compare_masks(item: MaskClass, labels: Sequence[Label]) -> dict[str, Any]:
     and ``sizes`` (the ``[height, width]`` of each label's mask). If the masks are not all
     the same size they disagree, and ``min_iou`` and the IoU of each mismatched pair are
     None, since an IoU is not defined between masks of different sizes.
+
+    The sizes are compared first, and the IoU of a pair of the same size is computed from
+    the run lists (``rle.counts_iou``); no mask is ever decoded pixel by pixel.
     """
     encoded = [_part(label, "masks")[item.name] for label in labels]
     sizes = [list(mask["size"]) for mask in encoded]
-    pixels = [rle.decode(mask) for mask in encoded]
+    runs = [rle.to_uncompressed(mask, max_pixels)["counts"] for mask in encoded]
 
     pairwise = [
-        (i, j, rle.mask_iou(pixels[i], pixels[j]) if sizes[i] == sizes[j] else None)
+        (i, j, rle.counts_iou(runs[i], runs[j]) if sizes[i] == sizes[j] else None)
         for i, j in combinations(range(len(labels)), 2)
     ]
     ious = [iou for _, _, iou in pairwise]

@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+{% block title %}{{ workflow.workflow }} · label-task-queue{% endblock %}
+{% block head %}{% include "partials/mermaid_head.html" %}{% endblock %}
+{% block content %}
+{% set base = root ~ "/admin/projects/" ~ project ~ "/workflows/" ~ workflow.workflow %}
+<p class="crumbs"><a href="{{ root }}/admin/projects">Projects</a> › <a href="{{ root }}/admin/projects/{{ project }}">{{ project }}</a></p>
+<h1>Workflow {{ workflow.workflow }}</h1>
+<p class="muted">Dataset {{ workflow.dataset }} · label task {{ workflow.label_task }} · config version {{ workflow.active_version }} · seed {{ workflow.seed }} · started by {{ workflow.started_by }} on {{ workflow.started_at.strftime("%Y-%m-%d %H:%M") }} UTC</p>
+{% if staffing %}
+<div class="problem warn" role="status"><p>Staffing warnings:</p><ul>{% for w in staffing %}<li>{{ w }}</li>{% endfor %}</ul></div>
+{% endif %}
+
+<section class="card" id="progress">
+  <h2>Progress</h2>
+  <table class="list">
+    <thead><tr><th>Entered</th><th>In progress</th><th>Final</th><th>Unresolved</th><th>No final label</th><th>Excluded</th></tr></thead>
+    <tbody><tr>
+      {% set p = workflow.progress.items %}
+      <td>{{ p.entered }}</td><td>{{ p.in_progress }}</td><td>{{ p.final }}</td><td>{{ p.unresolved }}</td><td>{{ p.none }}</td><td>{{ p.excluded }}</td>
+    </tr></tbody>
+  </table>
+  {% set pauses = {} %}
+  {% for s in workflow.stages %}{% set _ = pauses.update({s.name: s}) %}{% endfor %}
+  <table class="list">
+    <thead><tr><th>Stage</th><th>Open</th><th>Claimed</th><th>Filled</th><th>Cancelled</th><th>Claims</th><th>Actions</th></tr></thead>
+    <tbody>
+    {% for s in workflow.progress.stages %}
+      {% set stage = pauses.get(s.stage) %}
+      <tr>
+        <td>{{ s.stage }}{% if stage %} <span class="muted">({{ stage.roles | join(", ") }})</span>{% else %} <span class="tag">removed</span>{% endif %}</td>
+        <td>{{ s.open }}</td><td>{{ s.claimed }}</td><td>{{ s.filled }}</td><td>{{ s.cancelled }}</td>
+        <td>{% if stage and stage.paused %}paused by {{ stage.paused.by }}: {{ stage.paused.reason }}{% elif stage %}open{% endif %}</td>
+        <td class="actions">
+          {% if stage %}
+          <form class="inline" method="post" action="{{ base }}/stages/{{ s.stage }}/{{ 'resume' if stage.paused else 'pause' }}">
+            <input type="hidden" name="csrf" value="{{ csrf }}">
+            <label class="sr-only" for="stage-reason-{{ s.stage }}">Reason</label>
+            <input id="stage-reason-{{ s.stage }}" name="reason" placeholder="reason" required>
+            <button type="submit">{{ "Resume stage" if stage.paused else "Pause stage" }}</button>
+          </form>
+          <form class="inline" method="post" action="{{ base }}/stages/{{ s.stage }}/cancel-open-slots">
+            <input type="hidden" name="csrf" value="{{ csrf }}">
+            <label class="sr-only" for="cancel-reason-{{ s.stage }}">Reason</label>
+            <input id="cancel-reason-{{ s.stage }}" name="reason" placeholder="reason" required>
+            <button type="submit">Cancel open slots</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <form class="inline" method="post" action="{{ base }}/{{ 'resume' if workflow.paused else 'pause' }}">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    {% if workflow.paused %}<span>Paused by {{ workflow.paused.by }} since {{ workflow.paused.since.strftime("%Y-%m-%d %H:%M") }} UTC: {{ workflow.paused.reason }}.</span>{% endif %}
+    <label class="sr-only" for="wf-reason">Reason</label>
+    <input id="wf-reason" name="reason" placeholder="reason" required>
+    <button type="submit">{{ "Resume workflow" if workflow.paused else "Pause workflow" }}</button>
+  </form>
+</section>
+
+<section class="card" id="config">
+  <h2>Config in force</h2>
+  <pre class="mermaid">{{ diagram }}</pre>
+  <details><summary>Diagram source (Mermaid)</summary><pre>{{ diagram }}</pre></details>
+  <details open><summary>Resolved YAML (every default written out)</summary><pre class="yaml">{{ resolved }}</pre></details>
+</section>
+
+<section class="card" id="exports">
+  <h2>Exports and reports</h2>
+  <ul class="plain">
+    <li>Items table (one row per item: final label, how it was decided, status): <a href="{{ api_base }}/exports/items?format=csv" download>CSV</a> · <a href="{{ api_base }}/exports/items?format=parquet" download>Parquet</a></li>
+    <li>Labels table (one row per label: labeler, role, stage, version, what was shown, score): <a href="{{ api_base }}/exports/labels?format=csv" download>CSV</a> · <a href="{{ api_base }}/exports/labels?format=parquet" download>Parquet</a></li>
+    <li>Reports (JSON): <a href="{{ api_base }}/reports/scores">scores against keys</a> · <a href="{{ api_base }}/reports/sampling">sampling rates</a></li>
+  </ul>
+</section>
+
+<section class="card" id="explain">
+  <h2>Explain an item</h2>
+  <form method="get" action="{{ base }}/explain" class="row">
+    <label for="explain-item">Item id</label>
+    <input id="explain-item" name="item" required>
+    <button type="submit">Explain</button>
+  </form>
+  <h3>Exclude an item</h3>
+  <form method="post" action="{{ base }}/items/exclude" class="row">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label for="exclude-item">Item id</label>
+    <input id="exclude-item" name="item" required>
+    <label for="exclude-reason">Reason</label>
+    <input id="exclude-reason" name="reason" required>
+    <button type="submit">Exclude</button>
+  </form>
+</section>
+
+<section class="card" id="versions">
+  <h2>Config versions</h2>
+  <ul class="plain">
+  {% for v in versions %}
+    <li>Version {{ v.version }}{% if v.active %} <span class="tag">active</span>{% endif %} · by {{ v.activated_by }} on {{ v.activated_at.strftime("%Y-%m-%d %H:%M") }} UTC{% if v.reason %} · {{ v.reason }}{% endif %}
+      {% if v.diff %}<details><summary>What changed</summary><pre class="diff">{{ v.diff }}</pre></details>{% endif %}
+    </li>
+  {% endfor %}
+  </ul>
+</section>
+
+<section class="card" id="edit">
+  <h2>Edit the running workflow</h2>
+  <p class="muted">Edits are forward-only: a new version governs only decisions made after it is activated. Paste the whole new config; the preview shows what it changes and what it touches. Changing the dataset, the label task, a stage's input or name needs a new workflow.</p>
+  <div class="two-col">
+    <form method="post" action="{{ base }}/edits" class="stack" id="edit-form">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <input type="hidden" name="base_version" value="{{ workflow.active_version }}">
+      <label for="edit-config">New config (YAML)</label>
+      <textarea id="edit-config" name="config" rows="18" spellcheck="false" required
+        hx-post="{{ base }}/preview-edit"
+        hx-trigger="keyup changed delay:600ms"
+        hx-include="closest form"
+        hx-target="#preview">{{ edit_config if edit_config is defined else resolved }}</textarea>
+      <label for="edit-reason">Reason</label>
+      <input id="edit-reason" name="reason" placeholder="why (kept in the record)">
+      <button type="submit">Activate as version {{ workflow.active_version + 1 }}</button>
+    </form>
+    <section id="preview" aria-live="polite" class="card">
+      <p class="muted">Change the config to see a preview of the edit.</p>
+    </section>
+  </div>
+</section>
+{% endblock %}

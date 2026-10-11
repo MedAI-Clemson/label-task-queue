@@ -10,6 +10,12 @@ The rules:
 4. ``final`` is a non-empty list of distinct stage names.
 5. Coverage: every stage either is listed in ``final`` or passes all of its items on to
    a later stage. Otherwise some items could finish with no final label.
+6. Two stages that can hold the same item at the same time (*parallel* stages: neither
+   takes its items from the other, and no upstream agreed/disagreed split keeps their
+   items apart) may not share a role when either has ``labels_per_item: all``. The
+   ``all`` stage reserves a slot for every holder of the role, nobody labels an item twice
+   in a workflow, so whoever labels the item in the other stage can never fill their
+   reserved slot, and the item would stay in progress forever.
 
 The rules read plain data (nested dicts and lists), so they run both on a finished
 ``WorkflowConfig`` and on a half-valid document that ``validate_config`` is checking.
@@ -19,6 +25,7 @@ from __future__ import annotations
 
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass
+from itertools import combinations
 from typing import Any
 
 from labelflow.engine.config.problems import (
@@ -55,6 +62,7 @@ class _Stage:
     labels_per_item: Any
     sample: Any
     clean: bool  # True when the stage has no errors of its own
+    roles: tuple[str, ...] = ()  # from `assign_to`; empty when missing or not usable
 
     @property
     def subject(self) -> str:
@@ -85,7 +93,20 @@ def check_graph(data: Mapping[str, Any], bad: Collection[tuple] = ()) -> list[Pr
     problems += _check_final(data, stages, bad)
     if not problems and not bad:
         problems += _check_coverage(data, stages)
+        problems += _check_parallel_roles(stages)
     return problems
+
+
+def parallel_stages(data: Mapping[str, Any]) -> list[tuple[str, str]]:
+    """The pairs of stage names that can hold the same item at the same time, in order.
+
+    Two stages are parallel when neither takes its items, directly or through other
+    stages, from the other, and no upstream stage splits them: a stage fed by ``x.agreed``
+    and one fed by ``x.disagreed`` (or by stages downstream of those) never see the same
+    item. For a document that passes the other graph rules.
+    """
+    pairs = _parallel_pairs(_read_stages(data, ()))
+    return [(a.name, b.name) for a, b in pairs if a.name and b.name]
 
 
 def _has_error(bad: Collection[tuple], path: tuple) -> bool:
@@ -110,6 +131,9 @@ def _read_stages(data: Mapping[str, Any], bad: Collection[tuple]) -> list[_Stage
         raw_input = entry.get("input")
         if isinstance(raw_input, str) and not _has_error(bad, ("stages", index, "input")):
             upstream, _, outcome = raw_input.partition(".")
+        roles: tuple[str, ...] = ()
+        if not _has_error(bad, ("stages", index, "assign_to")):
+            roles = _read_roles(entry.get("assign_to"))
         stages.append(
             _Stage(
                 position=index + 1,
@@ -119,9 +143,18 @@ def _read_stages(data: Mapping[str, Any], bad: Collection[tuple]) -> list[_Stage
                 labels_per_item=entry.get("labels_per_item", 1),
                 sample=entry.get("sample", 1.0),
                 clean=not _has_error(bad, ("stages", index)),
+                roles=roles,
             )
         )
     return stages
+
+
+def _read_roles(assign_to: object) -> tuple[str, ...]:
+    if isinstance(assign_to, str):
+        return (assign_to,)
+    if isinstance(assign_to, list | tuple) and all(isinstance(role, str) for role in assign_to):
+        return tuple(assign_to)
+    return ()
 
 
 def _check_unique_names(stages: list[_Stage]) -> list[Problem]:
@@ -306,3 +339,98 @@ def _lost_through(stage: _Stage, outcome: str, takers: list[_Stage]) -> str:
         return ""
     sampled = ", ".join(f"{t.name} takes only a {percent(t.sample)} sample" for t in takers)
     return f"{sampled} of '{stage.name}.{outcome}'"
+
+
+# ------------------------------------------------------------------- parallel stages
+
+
+def _paths(stages: list[_Stage]) -> dict[str, set[tuple[str, str]]]:
+    """For each stage, the ``(stage, outcome)`` links an item follows to reach it."""
+    paths: dict[str, set[tuple[str, str]]] = {}
+    for stage in stages:
+        if stage.name is None:
+            continue
+        if stage.upstream is None or stage.upstream not in paths:
+            paths[stage.name] = set()
+        else:
+            paths[stage.name] = paths[stage.upstream] | {(stage.upstream, stage.outcome)}
+    return paths
+
+
+def _parallel_pairs(stages: list[_Stage]) -> list[tuple[_Stage, _Stage]]:
+    """The pairs of stages that can hold the same item at the same time (``parallel_stages``)."""
+    paths = _paths(stages)
+    pairs = []
+    for first, second in combinations([s for s in stages if s.name], 2):
+        upstream_of_first = {name for name, _ in paths[first.name]}
+        upstream_of_second = {name for name, _ in paths[second.name]}
+        if first.name in upstream_of_second or second.name in upstream_of_first:
+            continue  # one takes its items from the other
+        if _split_apart(paths[first.name], paths[second.name]):
+            continue  # an item agreed or disagreed upstream, never both
+        pairs.append((first, second))
+    return pairs
+
+
+def _split_apart(first: set[tuple[str, str]], second: set[tuple[str, str]]) -> bool:
+    """Whether a stage upstream of both sends its agreed items one way and its disagreed another."""
+    agreed = {name for name, outcome in first if outcome == "agreed"}
+    disagreed = {name for name, outcome in first if outcome == "disagreed"}
+    other_agreed = {name for name, outcome in second if outcome == "agreed"}
+    other_disagreed = {name for name, outcome in second if outcome == "disagreed"}
+    return bool(agreed & other_disagreed) or bool(disagreed & other_agreed)
+
+
+def _check_parallel_roles(stages: list[_Stage]) -> list[Problem]:
+    """Parallel stages sharing a role may not use ``labels_per_item: all`` (rule 6)."""
+    problems = []
+    for first, second in _parallel_pairs(stages):
+        shared = [role for role in first.roles if role in second.roles]
+        everyone = [s for s in (first, second) if s.labels_per_item == "all"]
+        if not shared or not everyone:
+            continue
+        the_role = (
+            f"the role '{shared[0]}'" if len(shared) == 1 else f"the roles {quoted_list(shared)}"
+        )
+        if len(everyone) == 2:
+            consequence = (
+                f"Both have `labels_per_item: all`, which reserves a slot in each stage for "
+                f"every holder of {the_role}, but nobody labels an item twice in a workflow, so "
+                "each person can fill only one of their two slots, and the item would stay in "
+                "progress forever."
+            )
+        else:
+            (reserving,) = everyone
+            other = second if reserving is first else first
+            consequence = (
+                f"'{reserving.name}' has `labels_per_item: all`, which reserves a slot for "
+                f"every holder of {the_role}, but nobody labels an item twice in a workflow, so "
+                f"anyone who labels the item in '{other.name}' first can never fill their slot "
+                f"in '{reserving.name}', and the item would stay in progress forever."
+            )
+        problems.append(
+            Problem(
+                stage_where(everyone[0].name, everyone[0].position, "labels_per_item"),
+                sentences(
+                    f"Stages '{first.name}' and '{second.name}' can both hold the same item "
+                    f"at the same time ({_why_parallel(first, second)}), and both are assigned "
+                    f"to {the_role}.",
+                    consequence,
+                    "Give the two stages different roles, or chain them so that one takes "
+                    f"the other's output (`input: {first.name}` on '{second.name}').",
+                ),
+            )
+        )
+    return problems
+
+
+def _why_parallel(first: _Stage, second: _Stage) -> str:
+    if first.upstream is None and second.upstream is None:
+        return "both take every item of the dataset"
+    first_input = f"{first.upstream}.{first.outcome}" if first.outcome != "all" else first.upstream
+    second_input = (
+        f"{second.upstream}.{second.outcome}" if second.outcome != "all" else second.upstream
+    )
+    if first_input == second_input:
+        return f"both take their items from '{first_input}'"
+    return "neither takes its items from the other"

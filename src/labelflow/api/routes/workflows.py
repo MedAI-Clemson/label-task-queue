@@ -13,19 +13,10 @@ from typing import Annotated, Any
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
-from labelflow.api import reads
 from labelflow.api.deps import AdminProject, UserProject
 from labelflow.api.errors import Forbidden, Unprocessable, errors
-from labelflow.engine import ChangePreview, Engine
-from labelflow.engine.config import (
-    ConfigReport,
-    ValidationContext,
-    resolved_yaml,
-    to_mermaid,
-    validate_config,
-)
-from labelflow.engine.queries import role_holders
-from labelflow.labeltask import LabelTaskRegistry
+from labelflow.engine import ChangePreview, Progress, Workflow, WorkflowDetail
+from labelflow.engine.config import ConfigReport, resolved_yaml, to_mermaid, validate_config
 
 router = APIRouter(prefix="/projects/{project}/workflows", responses=errors(401, 403, 404, 422))
 
@@ -82,74 +73,21 @@ class StartOut(BaseModel):
     )
 
 
-class StageSummary(BaseModel):
-    name: str = Field(description="The stage's name.")
-    assign_to: list[str] = Field(description="The roles whose holders may claim its slots.")
+class WorkflowOut(Workflow):
+    """A workflow as it runs now, with its seed shown to administrators only."""
 
-
-class WorkflowSummary(BaseModel):
-    workflow: str = Field(description="The workflow's name.")
-    dataset: str = Field(description="The dataset it labels.")
-    label_task: str = Field(description="The label task, as `name@version`.")
-    status: str = Field(description="`running` while the workflow runs.")
-    active_version: int = Field(description="The config version now in force.")
-    started_by: str | None = Field(description="Who started the workflow.")
-    started_at: datetime = Field(description="When it started (UTC).")
-    stages: list[StageSummary] = Field(description="Its stages, in order.")
-
-
-class ItemProgress(BaseModel):
-    entered: int = Field(description="Items that entered the workflow.")
-    in_progress: int = Field(description="Items still being labeled or waiting for a label.")
-    final: int = Field(description="Items with their final label.")
-    unresolved: int = Field(description="Items whose labels did not agree, with no final label.")
-    none: int = Field(description="Items finished with no final label, as the config asks.")
-    excluded: int = Field(description="Items an admin excluded.")
-
-
-class StageProgress(BaseModel):
-    stage: str = Field(description="The stage's name.")
-    open: int = Field(description="Slots waiting for someone to claim them.")
-    claimed: int = Field(description="Slots someone has claimed and is working on.")
-    filled: int = Field(description="Slots that have their label.")
-    cancelled: int = Field(description="Slots an admin cancelled, or that an exclusion closed.")
-
-
-class Progress(BaseModel):
-    items: ItemProgress = Field(description="Items by status.")
-    stages: list[StageProgress] = Field(description="Slots by stage.")
-
-
-class PauseOut(BaseModel):
-    by: str | None = Field(description="Who paused it.")
-    since: datetime = Field(description="When it was paused (UTC).")
-    reason: str = Field(description="Why it was paused, as given by the person who paused it.")
-
-
-class StageDetail(StageSummary):
-    paused: bool = Field(
-        description="Whether the stage is paused: none of its slots can be claimed, though "
-        "items keep arriving and claims already held can still be submitted."
-    )
-    pause: PauseOut | None = Field(description="Who paused the stage, when and why, if paused.")
-
-
-class WorkflowDetail(WorkflowSummary):
-    stages: list[StageDetail] = Field(description="Its stages, in order, with their pause state.")
-    paused: bool = Field(
-        description="Whether the whole workflow is paused: no slot can be claimed in any "
-        "stage. Stages paused on their own stay paused when the workflow is resumed."
-    )
-    pause: PauseOut | None = Field(
-        description="Who paused the workflow, when and why, if it is paused."
-    )
     seed: int | None = Field(
         description="The seed that fixes the workflow's random draws. Only administrators see "
         "it: knowing it would tell labelers which of their items will be reviewed."
     )
+
+
+class WorkflowDetailOut(WorkflowOut):
+    """A workflow with its config in force and how far it has got."""
+
     resolved_yaml: str = Field(description="The active config with every default written out.")
     diagram: str = Field(description="A Mermaid flowchart of the active config.")
-    progress: Progress = Field(description="How far the workflow has got.")
+    progress: Progress = Field(description="Items by status and slots by stage.")
 
 
 class VersionOut(BaseModel):
@@ -190,21 +128,24 @@ class EditOut(BaseModel):
     warnings: list[str] = Field(description="Stages whose roles have too few people to fill them.")
 
 
-def project_context(engine: Engine, registry: LabelTaskRegistry) -> ValidationContext:
-    """What the project already has, to check a config against."""
-    store = engine.store
-    with store.transaction():
-        roles = role_holders(store)
-        datasets = [row["dataset"] for row in store.select("datasets")]
-    return ValidationContext(roles=roles, datasets=datasets, label_tasks=registry.refs())
-
-
 def check_config(ctx: AdminProject, source: str | dict[str, Any]) -> ConfigReport:
-    return validate_config(source, project_context(ctx.engine, ctx.engine.label_tasks))
+    """Check a config against the project's roles, datasets and label tasks."""
+    return validate_config(source, ctx.engine.validation_context())
 
 
-def _problems(report: ConfigReport) -> list[ProblemOut]:
-    return [ProblemOut(where=p.where, message=p.message) for p in report.errors]
+def _problems(problems: Any) -> list[ProblemOut]:
+    return [ProblemOut(where=p.where, message=p.message) for p in problems]
+
+
+def _as_seen_by(ctx: UserProject, workflow: Workflow) -> dict[str, Any]:
+    """The workflow's fields, with the seed left out for anyone but an administrator."""
+    fields = workflow.model_dump(exclude={"config"})
+    return fields if ctx.user.is_admin else fields | {"seed": None}
+
+
+def _holds_a_role_in(ctx: UserProject, workflow: Workflow) -> bool:
+    used = {role for stage in workflow.stages for role in stage.roles}
+    return ctx.user.is_admin or bool(ctx.engine.user_roles(ctx.actor) & used)
 
 
 @router.post(
@@ -222,8 +163,8 @@ def validate_workflow(body: ConfigIn, ctx: AdminProject) -> ValidationOut:
     config = report.config
     return ValidationOut(
         ok=report.ok,
-        errors=_problems(report),
-        warnings=[ProblemOut(where=p.where, message=p.message) for p in report.warnings],
+        errors=_problems(report.errors),
+        warnings=_problems(report.warnings),
         resolved_yaml=resolved_yaml(config) if config else None,
         diagram=to_mermaid(config) if config else None,
         report=report.render(),
@@ -256,41 +197,39 @@ def start_workflow(body: StartIn, ctx: AdminProject) -> StartOut:
 
 @router.get(
     "",
-    response_model=list[WorkflowSummary],
+    response_model=list[WorkflowOut],
     tags=["admin: workflows", "labeler"],
     summary="List workflows",
 )
-def list_workflows(ctx: UserProject) -> list[WorkflowSummary]:
-    """List the project's workflows. Administrators see all of them; anyone else sees the
-    workflows with a stage that one of their roles is assigned to."""
-    store = ctx.engine.store
-    summaries = reads.workflow_summaries(store)
-    if not ctx.user.is_admin:
-        mine = reads.user_roles(store, ctx.actor)
-        summaries = [
-            s for s in summaries if mine & {r for stage in s["stages"] for r in stage["assign_to"]}
-        ]
-    return [WorkflowSummary(**s) for s in summaries]
+def list_workflows(ctx: UserProject) -> list[WorkflowOut]:
+    """List the project's workflows with their stages and what is paused. Administrators see
+    all of them; anyone else sees the workflows with a stage that one of their roles is
+    assigned to."""
+    return [
+        WorkflowOut(**_as_seen_by(ctx, w))
+        for w in ctx.engine.workflows()
+        if _holds_a_role_in(ctx, w)
+    ]
 
 
 @router.get(
     "/{workflow}",
-    response_model=WorkflowDetail,
+    response_model=WorkflowDetailOut,
     tags=["admin: workflows", "labeler"],
     summary="Show a workflow",
 )
-def get_workflow(workflow: str, ctx: UserProject) -> WorkflowDetail:
+def get_workflow(workflow: str, ctx: UserProject) -> WorkflowDetailOut:
     """Show a workflow: the config in force with every default written out, its diagram, its
     progress (items by status, slots by stage) and what is paused. Administrators can see
     every workflow; anyone else only those they hold a role in."""
-    store = ctx.engine.store
-    used = reads.workflow_roles(store, workflow)  # also answers 404 for an unknown workflow
-    if not ctx.user.is_admin and not reads.user_roles(store, ctx.actor) & used:
+    detail: WorkflowDetail = ctx.engine.workflow(workflow)
+    if not _holds_a_role_in(ctx, detail):
         raise Forbidden("You do not hold a role in this workflow.")
-    detail = reads.workflow_detail(store, workflow)
-    if not ctx.user.is_admin:
-        detail["seed"] = None
-    return WorkflowDetail(**detail)
+    return WorkflowDetailOut(
+        **_as_seen_by(ctx, detail),
+        resolved_yaml=resolved_yaml(detail.config),
+        diagram=to_mermaid(detail.config),
+    )
 
 
 @router.get(
@@ -302,8 +241,10 @@ def get_workflow(workflow: str, ctx: UserProject) -> WorkflowDetail:
 def list_versions(workflow: str, ctx: AdminProject) -> list[VersionOut]:
     """List every config version of a workflow, oldest first, with who activated it, why,
     and what it changed."""
-    rows = reads.versions(ctx.engine.store, ctx.db, ctx.name, workflow)
-    return [VersionOut(**row) for row in rows]
+    return [
+        VersionOut(**v.model_dump(exclude={"config"}), resolved_yaml=resolved_yaml(v.config))
+        for v in ctx.engine.config_versions(workflow)
+    ]
 
 
 @router.post(

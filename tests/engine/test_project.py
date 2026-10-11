@@ -6,6 +6,7 @@ from labelflow.engine import (
     AlreadyExists,
     Engine,
     InvalidRequest,
+    LabelTaskFailed,
     NewItem,
     NotAllowed,
     UnknownDataset,
@@ -194,7 +195,10 @@ def test_a_failing_command_leaves_no_trace(build, cfg):
         if user == "ana":
             engine.submit("wf", slot.slot, user, {"value": "a"}, packet.shown())
     before_events, before_state = engine.store.events(), engine.store.snapshot()
-    with pytest.raises(RuntimeError, match="crashed"):
+    # The crash becomes a refusal with a plain message (an EngineError, so the API answers
+    # with it rather than a 500), and the transaction rolls back: the claim is still held.
+    with pytest.raises(LabelTaskFailed, match="standin@1 failed while checking consensus"):
         engine.submit("wf", slot.slot, "ben", {"value": "a"}, packet.shown())
     assert engine.store.events() == before_events
     assert engine.store.snapshot() == before_state
+    assert engine.slot("wf", slot.slot).claimed_by == "ben"

@@ -82,6 +82,17 @@ class VersionConflict(NotAllowed):
     """The edit was previewed against a config version that is no longer the active one."""
 
 
+class OntologyChanged(NotAllowed):
+    """The label task's ontology version is not the one the item's earlier labels were made
+    under, so the labels cannot be compared. The ontology changed under a running workflow;
+    bump the label task's version and start a new workflow for it."""
+
+
+class LabelTaskFailed(EngineError):
+    """A label task call raised an unexpected error (a bug in the label task, not a problem
+    with the request). Nothing was recorded."""
+
+
 class InvalidRequest(EngineError):
     """A request argument is malformed (an empty reason, a bad name, ...)."""
 

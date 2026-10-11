@@ -17,12 +17,14 @@ Every decision is one logged event whose ``because`` names the config line behin
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
 from labelflow.engine import events as ev
 from labelflow.engine.config import LabelsFraction, Stage, and_list
 from labelflow.engine.draws import draw
+from labelflow.engine.errors import EngineError, LabelTaskFailed, OntologyChanged
 from labelflow.engine.queries import (
     active_config,
     config_at,
@@ -33,7 +35,25 @@ from labelflow.engine.queries import (
     workflow_row,
 )
 from labelflow.engine.store import Store
-from labelflow.labeltask import LabelTaskRegistry, LabelValidationError
+from labelflow.labeltask import ConsensusResult, LabelTaskRegistry
+
+
+def ask_task(task: Any, doing: str, call: Callable[[], Any]) -> Any:
+    """Run one label task call; an unexpected error becomes a LabelTaskFailed.
+
+    The label task is code outside the engine. If it raises anything but the errors the
+    caller expects, the command is refused with a plain message instead of crashing, so the
+    transaction rolls back and nothing half-done is recorded.
+    """
+    try:
+        return call()
+    except EngineError:
+        raise  # a refusal the caller already phrased (an invalid label, for example)
+    except Exception as error:
+        raise LabelTaskFailed(
+            f"Label task {task.ref} failed while {doing}: {type(error).__name__}: {error}. "
+            "This is a problem in the label task, not in the request; nothing was recorded."
+        ) from error
 
 
 class Flow:
@@ -188,7 +208,7 @@ class Flow:
         ids = tuple(r["label"] for r in labels)
         outcomes: list[str] = []
         if len(labels) >= 2:
-            result = self.task.check_consensus([self.task.validate(r["value"]) for r in labels])
+            result = self._consensus(stage, item, labels)
             verdict = "agreed" if result.agreed else "disagreed"
             self._emit(
                 ev.ConsensusChecked,
@@ -232,6 +252,33 @@ class Flow:
             if target.name in targets:
                 cause = f"{target.name}.input = {target.input}"
                 self._arrive(target, item, source=target.input, cause=cause)
+
+    def _consensus(self, stage: str, item: str, labels: list[dict]) -> ConsensusResult:
+        """Ask the label task whether the item's labels in the stage agree.
+
+        The labels go to the task exactly as stored: each was validated when it was
+        submitted, and checking it again against the label task registered now would turn
+        an edited ontology file into a submit that can never succeed. The task's ontology
+        version must be the one the labels were made under; otherwise the labels are not
+        comparable and the command is refused (OntologyChanged).
+        """
+        current = self.task.ontology_version
+        recorded = sorted({r["ontology_version"] for r in labels})
+        if recorded != [current]:
+            earlier = [v for v in recorded if v != current] or recorded
+            raise OntologyChanged(
+                f"Item {item} cannot leave stage {stage}: its labels there were made under "
+                f"ontology version {and_list(earlier)}, but label task {self.task.ref} now "
+                f"has ontology version {current}, so the labels cannot be compared. The "
+                "ontology changed under a running workflow: bump the label task's version "
+                "and start a new workflow for the new ontology. Nothing was recorded."
+            )
+        values = [r["value"] for r in labels]
+        return ask_task(
+            self.task,
+            f"checking consensus on item {item} in {stage}",
+            lambda: self.task.check_consensus(values),
+        )
 
     # --- the final step -------------------------------------------------------------------
 
@@ -291,7 +338,12 @@ class Flow:
     # --- scoring --------------------------------------------------------------------------
 
     def score(self, stage: Stage, item: str, label_id: int, user: str, label: dict) -> None:
-        """Score a new label against the item's key (``score_against``). Changes no routing."""
+        """Score a new label against the item's key (``score_against``). Changes no routing.
+
+        ``label`` is the new label in the task's normal form (validated at the submit). A
+        key the task rejects, however it rejects it, is logged as ``invalid_key``: scoring
+        never blocks a submit.
+        """
         prop = stage.score_against
         properties = self.store.get("items", dataset=self.dataset, item=item)["properties"]
         line = f"{stage.name}.score_against = {prop}"
@@ -301,11 +353,15 @@ class Flow:
             key = properties[prop]
             try:
                 key = self.task.validate(key)
-            except (LabelValidationError, TypeError, AttributeError) as error:
+            except Exception as error:
                 fields = {"key_status": "invalid_key", "detail": {"problem": str(error)}}
                 because = f"{line} (the key is not a valid label: {error})"
             else:
-                result = self.task.score(self.task.validate(label), key)
+                result = ask_task(
+                    self.task,
+                    f"scoring label {label_id} against the key of item {item}",
+                    lambda: self.task.score(label, key),
+                )
                 fields = {
                     "key_status": "scored",
                     "agreed": result.agreed,

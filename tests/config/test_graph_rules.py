@@ -52,27 +52,33 @@ def test_input_may_name_an_earlier_stage():
     make([("a", {}), ("b", {"input": "a"}), ("c", {"input": "a"}), ("d", {"input": "c"})])
 
 
-def test_input_unknown_stage_suggests_a_close_name():
-    [problem] = problems_of([("annotate", {}), ("review", {"input": "anotate"})])
+@pytest.mark.parametrize(
+    ("stages", "said"),
+    [
+        (
+            [("annotate", {}), ("review", {"input": "anotate"})],
+            "no stage listed before it has that name. Did you mean 'annotate'?",
+        ),
+        (
+            [("annotate", {}), ("review", {"input": "zzz"})],
+            "that name. The stages listed before it are 'annotate'.",
+        ),
+        (
+            [("review", {"input": "annotate"}), ("annotate", {})],
+            "'annotate' is listed after 'review'. Stages are listed in order",
+        ),
+        ([("annotate", {}), ("review", {"input": "review"})], "takes its items from itself"),
+        (
+            [("review", {"input": "annotate"})],
+            "no stage is listed before it. To take every item of the dataset, leave `input` out.",
+        ),
+    ],
+    ids=["misspelled", "unknown", "listed_later", "itself", "first_stage"],
+)
+def test_input_must_name_an_earlier_stage(stages, said):
+    [problem] = problems_of(stages)
     assert problem.where == "stage 'review', key 'input'"
-    assert "Did you mean 'annotate'?" in problem.message
-
-
-def test_input_unknown_stage_without_a_close_name_lists_the_earlier_stages():
-    [problem] = problems_of([("annotate", {}), ("review", {"input": "zzz"})])
-    assert "Did you mean" not in problem.message
-    assert "'annotate'" in problem.message
-
-
-def test_input_listed_later_says_stages_are_listed_in_order():
-    [problem] = problems_of([("review", {"input": "annotate"}), ("annotate", {})])
-    assert "'annotate' is listed after 'review'" in problem.message
-    assert "Stages are listed in order" in problem.message
-
-
-def test_input_may_not_be_the_stage_itself():
-    [problem] = problems_of([("a", {}), ("b", {"input": "b"})])
-    assert "from itself" in problem.message
+    assert said in problem.message
 
 
 @pytest.mark.parametrize("outcome", ["agreed", "disagreed"])

@@ -18,6 +18,7 @@ from labelflow.engine.config.models import NAME_PATTERN, LabelsFraction, Stage, 
 from labelflow.engine.config.problems import (
     Problem,
     closest,
+    describe,
     sentences,
     stage_where,
     suggestion,
@@ -67,23 +68,6 @@ def is_name(value: object) -> bool:
     return isinstance(value, str) and re.fullmatch(NAME_PATTERN, value) is not None
 
 
-def describe(value: object) -> str:
-    """Describe a value found in the file, for a message: ``'abc'``, ``1.5``, ``a list``."""
-    if value is None:
-        return "nothing"
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if isinstance(value, str):
-        return f"'{value if len(value) <= 40 else value[:37] + '...'}'"
-    if isinstance(value, int | float):
-        return repr(value)
-    if isinstance(value, list | tuple):
-        return "a list"
-    if isinstance(value, Mapping):
-        return "a group of keys"
-    return f"a value of the wrong kind ({type(value).__name__})"
-
-
 def as_number(value: object) -> float | None:
     """The value as a number if it is one (or text such as '0.5'); booleans are not numbers."""
     if isinstance(value, bool):
@@ -113,11 +97,6 @@ def _bad_name(value: object, subject: str, noun: str, example: str) -> str:
         f"{describe(value)} is not a valid {noun}. "
         f"A name starts with a letter and uses only letters, digits and underscores.{hint}"
     )
-
-
-def _explain_name(key: str, value: object) -> list[str]:
-    noun, example = NAME_KEYS[key]
-    return [_bad_name(value, f"`{key}`", noun, example)]
 
 
 def _explain_label_task(value: object) -> list[str]:
@@ -194,19 +173,17 @@ def _explain_final(value: object) -> list[str]:
         "`final` must be a list of stage names, such as [expert_review, annotate], "
         "or the word none."
     )
-    if isinstance(value, str):
-        if closest(value, ["none"]):
-            hint = "Did you mean 'none'?"
-        else:
-            hint = f"To use one stage, write `final: [{value}]`." if is_name(value) else ""
-        return [sentences(form, f"Got {describe(value)}.", hint)]
     if isinstance(value, list | tuple):
         return [
             _bad_name(entry, "Each entry of `final`", "stage name", "annotate")
             for entry in value
             if not is_name(entry)
         ]
-    return [sentences(form, f"Got {describe(value)}.")]
+    hint = ""
+    if isinstance(value, str):
+        one_stage = f"To use one stage, write `final: [{value}]`." if is_name(value) else ""
+        hint = suggestion(value, ["none"]) or one_stage
+    return [sentences(form, f"Got {describe(value)}.", hint)]
 
 
 def _explain_stages(value: object) -> list[str]:
@@ -245,26 +222,23 @@ def _explain_sample(value: object) -> list[str]:
 def _explain_labels_per_item(value: object) -> list[str]:
     if isinstance(value, Mapping):
         return _explain_labels_fraction(value)
-    hint = ""
-    if isinstance(value, str) and closest(value, ["all"]):
-        hint = "Did you mean 'all'?"
+    hint = suggestion(value, ["all"]) if isinstance(value, str) else ""
     return [sentences(f"labels_per_item cannot be {describe(value)}.", hint, LABELS_PER_ITEM_FORMS)]
 
 
 def _explain_labels_fraction(value: Mapping) -> list[str]:
     """Explain what is wrong inside ``labels_per_item: {count: ..., fraction: ...}``."""
-    messages = []
-    typo_targets = set()
-    for key in value:
-        if key not in FRACTION_KEYS:
-            match = closest(str(key), FRACTION_KEYS)
-            typo_targets.add(match)
-            messages.append(
-                sentences(
-                    f"labels_per_item has an unknown key '{key}'.",
-                    f"Did you mean '{match}'?" if match else "It takes `count` and `fraction`.",
-                )
-            )
+    unknown = [key for key in value if key not in FRACTION_KEYS]
+    messages = [
+        sentences(
+            f"labels_per_item has an unknown key '{key}'.",
+            suggestion(str(key), FRACTION_KEYS) or "It takes `count` and `fraction`.",
+        )
+        for key in unknown
+    ]
+    # A key that was probably misspelled is not also reported as missing.
+    typo_targets = {closest(str(key), FRACTION_KEYS) for key in unknown}
+
     count = value.get("count")
     count_ok = type(count) is int and count >= 2
     if "count" not in value:
@@ -278,27 +252,25 @@ def _explain_labels_fraction(value: Mapping) -> list[str]:
             f"labels_per_item: `count` must be a whole number of 2 or more; got {describe(count)}. "
             "For one label per item, write `labels_per_item: 1`."
         )
+
     fraction = value.get("fraction")
     number = as_number(fraction)
+    every_item = f"To give every item {count} labels, write `labels_per_item: {count}`."
     if "fraction" not in value:
         if "fraction" not in typo_targets:
-            hint = f"To give every item {count} labels, write `labels_per_item: {count}`."
             messages.append(
                 sentences(
                     "labels_per_item is missing `fraction`, the share of items that get "
                     "`count` labels, for example 0.2.",
-                    hint if count_ok else "",
+                    every_item if count_ok else "",
                 )
             )
     elif number is None or not 0 < number < 1:
-        hint = ""
-        if number == 1 and count_ok:
-            hint = f"To give every item {count} labels, write `labels_per_item: {count}`."
         messages.append(
             sentences(
                 "labels_per_item: `fraction` must be more than 0 and less than 1 "
                 f"(for example 0.2 for 20%); got {describe(fraction)}.",
-                hint,
+                every_item if number == 1 and count_ok else "",
             )
         )
     return messages
@@ -323,16 +295,18 @@ EXPLAINERS: dict[str, Callable[[Any], list[str]]] = {
 def explain_key(key: str, value: object) -> list[str]:
     """Plain-language messages about a known key that has an unusable value."""
     if key in NAME_KEYS:
-        return _explain_name(key, value)
-    return EXPLAINERS[key](value)
+        noun, example = NAME_KEYS[key]
+        return [_bad_name(value, f"`{key}`", noun, example)]
+    return EXPLAINERS[key](value) or [
+        f"{key} has a value that cannot be used; got {describe(value)}."
+    ]
 
 
 def unknown_key_message(key: object, allowed: tuple[str, ...], level: str) -> str:
     """Say that a key is not known, suggesting the closest allowed key."""
-    match = suggestion(str(key), allowed)
     return sentences(
         f"'{key}' is not a known key.",
-        match or f"The keys allowed {level} are: {', '.join(allowed)}.",
+        suggestion(str(key), allowed) or f"The keys allowed {level} are: {', '.join(allowed)}.",
     )
 
 
@@ -359,12 +333,16 @@ class _Level:
         return stage_where(name if is_name(name) else None, self.position + 1, key)
 
     def sort_key(self, key: object) -> tuple[int, int, int]:
-        """Where a problem belongs in the document: top-level keys, then stages in order."""
+        """Where a problem belongs in the document: top-level keys, then stages in order.
+
+        Known keys come in the order the model lists them; unknown keys after them, in the
+        order they were written.
+        """
         if key in self.keys:
             place = self.keys.index(key)
         else:
-            raw_keys = list(self.values)
-            place = 100 + (raw_keys.index(key) if key in raw_keys else 0)
+            written = list(self.values)
+            place = len(self.keys) + (written.index(key) if key in written else 0)
         if self.position is None:
             return (place, -1, 0)
         return (TOP_LEVEL_KEYS.index("stages"), self.position, place)
@@ -385,12 +363,15 @@ def _level_for(data: Mapping[str, Any], path: tuple) -> _Level | None:
     """The mapping of the document that an error path points into."""
     if path[0] != "stages" or len(path) < 3:
         return _Level(TOP_LEVEL_KEYS, "at the top level", data, None)
-    stages = data.get("stages")
-    if isinstance(stages, list | tuple) and path[1] < len(stages):
-        entry = stages[path[1]]
-        if isinstance(entry, Mapping):
-            return _Level(STAGE_KEYS, "in a stage", entry, path[1])
+    entry = _raw_stage(data, path[1])
+    if isinstance(entry, Mapping):
+        return _Level(STAGE_KEYS, "in a stage", entry, path[1])
     return None
+
+
+def _raw_stage(data: Mapping[str, Any], index: int) -> object:
+    stages = data.get("stages")
+    return stages[index] if isinstance(stages, list | tuple) and index < len(stages) else None
 
 
 def _kind(path: tuple, errors: list[dict[str, Any]]) -> str:
@@ -415,40 +396,38 @@ def translate_errors(
     groups: dict[tuple, list[dict[str, Any]]] = {}
     for error in errors:
         groups.setdefault(_key_path(tuple(error["loc"])), []).append(error)
+    levels = {path: _level_for(data, path) for path in groups}
+    kinds = {path: _kind(path, errs) for path, errs in groups.items()}
 
     # An unknown key that looks like a missing one is a typo: say it once, on the typo.
-    typos: dict[tuple, set[str]] = {}
-    for path, errs in groups.items():
-        level = _level_for(data, path)
-        if level and _kind(path, errs) == "unknown":
-            match = closest(str(path[-1]), level.keys)
-            if match:
-                typos.setdefault(path[:-1], set()).add(match)
+    typos = {
+        (path[:-1], closest(str(path[-1]), levels[path].keys))
+        for path in groups
+        if levels[path] is not None and kinds[path] == "unknown"
+    }
 
     found: list[tuple[tuple, Problem]] = []
     places: list[tuple] = []
-    for path, errs in groups.items():
+    for path in groups:
+        level, kind, key = levels[path], kinds[path], path[-1]
         if path[0] == "stages" and len(path) == 2:
-            number = path[1] + 1
+            # The stage itself is not a group of keys.
+            number = key + 1
             message = (
                 f"Stage {number} must be a group of keys such as `name` and `assign_to`; "
-                f"got {describe(_raw_stage(data, path[1]))}."
+                f"got {describe(_raw_stage(data, key))}."
             )
-            found.append(
-                ((TOP_LEVEL_KEYS.index("stages"), path[1], -1), Problem(f"stage {number}", message))
-            )
+            order = (TOP_LEVEL_KEYS.index("stages"), key, -1)
+            found.append((order, Problem(f"stage {number}", message)))
             places.append(path)
             continue
-        level = _level_for(data, path)
         if level is None:
             continue
-        key = path[-1]
-        kind = _kind(path, errs)
         value = level.values.get(key)
         if kind == "unknown":
             messages = [unknown_key_message(key, level.keys, level.phrase)]
         elif kind == "missing":
-            if key in typos.get(path[:-1], set()):
+            if (path[:-1], key) in typos:
                 continue
             messages = [missing_key_message(key)]
         elif key == "stages" and isinstance(value, list | tuple) and value:
@@ -456,17 +435,9 @@ def translate_errors(
             # That stage has its own error, so there is nothing more to say here.
             continue
         else:
-            messages = explain_key(key, value) or [
-                f"{key} has a value that cannot be used; got {describe(value)}."
-            ]
+            messages = explain_key(key, value)
         places.append(path)
-        for message in messages:
-            found.append((level.sort_key(key), Problem(level.where(key), message)))
+        found += [(level.sort_key(key), Problem(level.where(key), m)) for m in messages]
 
     found.sort(key=lambda item: item[0])
     return [problem for _, problem in found], places
-
-
-def _raw_stage(data: Mapping[str, Any], index: int) -> object:
-    stages = data.get("stages")
-    return stages[index] if isinstance(stages, list | tuple) and index < len(stages) else None

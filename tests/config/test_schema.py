@@ -13,18 +13,13 @@ SCHEMA_FILE = REPO_ROOT / "schema" / "workflow-config.schema.json"
 REGENERATE = "python -m labelflow.engine.config.schema > schema/workflow-config.schema.json"
 
 
-def test_the_committed_schema_is_up_to_date():
+def test_the_committed_schema_is_up_to_date_pretty_printed_and_sorted():
     committed = SCHEMA_FILE.read_text() if SCHEMA_FILE.exists() else ""
     assert committed == config_json_schema_text(), (
         "schema/workflow-config.schema.json does not match the config models. "
         f"Regenerate it from the repository root with:\n    {REGENERATE}"
     )
-
-
-def test_the_schema_file_is_pretty_printed_and_sorted():
-    text = SCHEMA_FILE.read_text()
-    assert text.endswith("}\n")
-    assert text == json.dumps(json.loads(text), indent=2, sort_keys=True) + "\n"
+    assert committed == json.dumps(json.loads(committed), indent=2, sort_keys=True) + "\n"
 
 
 def test_the_module_prints_the_same_schema():

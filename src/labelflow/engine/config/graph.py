@@ -23,6 +23,7 @@ from typing import Any
 
 from labelflow.engine.config.problems import (
     Problem,
+    and_list,
     percent,
     quoted_list,
     sentences,
@@ -65,6 +66,9 @@ class _Stage:
         """The stage inside a sentence: ``'x'`` or ``stage 2``."""
         return f"'{self.name}'" if self.name else f"stage {self.position}"
 
+    def takes_everything(self) -> bool:
+        return self.sample == 1
+
 
 def check_graph(data: Mapping[str, Any], bad: Collection[tuple] = ()) -> list[Problem]:
     """Check the graph rules on a config document and return every problem found.
@@ -85,6 +89,7 @@ def check_graph(data: Mapping[str, Any], bad: Collection[tuple] = ()) -> list[Pr
 
 
 def _has_error(bad: Collection[tuple], path: tuple) -> bool:
+    """Whether ``path``, or anything inside it, is known to be wrong."""
     return any(tuple(place[: len(path)]) == path for place in bad)
 
 
@@ -95,9 +100,8 @@ def _read_stages(data: Mapping[str, Any], bad: Collection[tuple]) -> list[_Stage
         return []
     stages = []
     for index, entry in enumerate(raw_stages):
-        position = index + 1
         if not isinstance(entry, Mapping):
-            stages.append(_Stage(position, None, None, "all", 1, 1.0, clean=False))
+            stages.append(_Stage(index + 1, None, None, "all", 1, 1.0, clean=False))
             continue
         name = entry.get("name")
         if not isinstance(name, str) or _has_error(bad, ("stages", index, "name")):
@@ -106,13 +110,12 @@ def _read_stages(data: Mapping[str, Any], bad: Collection[tuple]) -> list[_Stage
         raw_input = entry.get("input")
         if isinstance(raw_input, str) and not _has_error(bad, ("stages", index, "input")):
             upstream, _, outcome = raw_input.partition(".")
-            outcome = outcome or "all"
         stages.append(
             _Stage(
-                position=position,
+                position=index + 1,
                 name=name,
                 upstream=upstream,
-                outcome=outcome,
+                outcome=outcome or "all",
                 labels_per_item=entry.get("labels_per_item", 1),
                 sample=entry.get("sample", 1.0),
                 clean=not _has_error(bad, ("stages", index)),
@@ -126,69 +129,53 @@ def _check_unique_names(stages: list[_Stage]) -> list[Problem]:
     for stage in stages:
         if stage.name:
             positions.setdefault(stage.name, []).append(stage.position)
-    problems = []
-    for name, places in positions.items():
-        if len(places) > 1:
-            numbers = ", ".join(str(n) for n in places[:-1]) + f" and {places[-1]}"
-            problems.append(
-                Problem(
-                    stage_where(name, places[1], "name"),
-                    f"Stage names must be unique, but '{name}' is used by stages {numbers}. "
-                    "Rename all but one of them.",
-                )
-            )
-    return problems
+    return [
+        Problem(
+            stage_where(name, places[1], "name"),
+            f"Stage names must be unique, but '{name}' is used by stages {and_list(places)}. "
+            "Rename all but one of them.",
+        )
+        for name, places in positions.items()
+        if len(places) > 1
+    ]
 
 
 def _check_input(stage: _Stage, stages: list[_Stage]) -> list[Problem]:
-    """Check that the stage's input is a stage listed earlier, and that its output exists."""
+    """The stage's input is a stage listed earlier, and the output it names can exist."""
     upstream = stage.upstream
     if upstream is None:
         return []
     where = stage_where(stage.name, stage.position, "input")
-    earlier = [s for s in stages if s.position < stage.position and s.name]
-    earlier_names = list(dict.fromkeys(s.name for s in earlier if s.name))
-    later_names = {s.name for s in stages if s.position > stage.position}
+    earlier = [s for s in stages[: stage.position - 1] if s.name]
+    earlier_names = list(dict.fromkeys(s.name for s in earlier))
 
     if upstream in earlier_names:
-        first = next(s for s in earlier if s.name == upstream)
-        return _check_outcome(stage, first, where)
+        source = next(s for s in earlier if s.name == upstream)
+        return _check_outcome(stage, source, where)
     if upstream == stage.name:
-        return [
-            Problem(
-                where,
-                f"{stage.subject} takes its items from itself. "
-                "An input must be a stage listed before it.",
-            )
-        ]
-    if upstream in later_names:
-        return [
-            Problem(
-                where,
-                f"{stage.subject} takes its items from '{upstream}', but '{upstream}' is "
-                f"listed after {stage.target}. Stages are listed in order, and an input must "
-                f"be a stage listed earlier. Move '{upstream}' above {stage.target}.",
-            )
-        ]
-    if not earlier_names:
-        return [
-            Problem(
-                where,
-                f"{stage.subject} takes its items from '{upstream}', but no stage is listed "
-                "before it. To take every item of the dataset, leave `input` out.",
-            )
-        ]
-    help_text = sentences(
-        suggestion(upstream, earlier_names),
-        f"The stages listed before it are {quoted_list(earlier_names)}.",
-    )
-    return [
-        Problem(
-            where,
-            f"{stage.subject} takes its items from '{upstream}', but no stage listed "
-            f"before it has that name. {help_text}",
+        message = (
+            f"{stage.subject} takes its items from itself. "
+            "An input must be a stage listed before it."
         )
-    ]
+    elif upstream in {s.name for s in stages[stage.position :]}:
+        message = (
+            f"{stage.subject} takes its items from '{upstream}', but '{upstream}' is "
+            f"listed after {stage.target}. Stages are listed in order, and an input must "
+            f"be a stage listed earlier. Move '{upstream}' above {stage.target}."
+        )
+    elif not earlier_names:
+        message = (
+            f"{stage.subject} takes its items from '{upstream}', but no stage is listed "
+            "before it. To take every item of the dataset, leave `input` out."
+        )
+    else:
+        message = sentences(
+            f"{stage.subject} takes its items from '{upstream}', but no stage listed "
+            "before it has that name.",
+            suggestion(upstream, earlier_names),
+            f"The stages listed before it are {quoted_list(earlier_names)}.",
+        )
+    return [Problem(where, message)]
 
 
 def _check_outcome(stage: _Stage, upstream: _Stage, where: str) -> list[Problem]:
@@ -230,27 +217,23 @@ def _check_final(data: Mapping[str, Any], stages: list[_Stage], bad: Collection[
         ]
     names = list(dict.fromkeys(s.name for s in stages if s.name))
     problems = []
-    reported_twice = set()
-    seen = set()
+    seen: set[str] = set()
     for entry in final:
         if not isinstance(entry, str):
             continue
         if entry not in names:
-            problems.append(
-                Problem(
-                    where,
-                    f"`final` lists '{entry}', but there is no stage with that name. "
-                    + sentences(
-                        suggestion(entry, names),
-                        f"The stages are {quoted_list(names)}." if names else "",
-                    ),
-                )
+            message = sentences(
+                f"`final` lists '{entry}', but there is no stage with that name.",
+                suggestion(entry, names),
+                f"The stages are {quoted_list(names)}." if names else "",
             )
-        elif entry in seen and entry not in reported_twice:
-            reported_twice.add(entry)
-            problems.append(
-                Problem(where, f"`final` lists '{entry}' more than once. List each stage once.")
+            problems.append(Problem(where, message))
+        elif entry in seen:
+            repeat = Problem(
+                where, f"`final` lists '{entry}' more than once. List each stage once."
             )
+            if repeat not in problems:
+                problems.append(repeat)
         seen.add(entry)
     return problems
 
@@ -268,7 +251,6 @@ def _check_coverage(data: Mapping[str, Any], stages: list[_Stage]) -> list[Probl
         reasons = _why_items_can_be_lost(stage, stages)
         if reasons is None:
             continue
-        name = stage.name
         if reasons:
             cause = f"not all of its items go on to a later stage ({'; '.join(reasons)})"
             consequence = "some items"
@@ -277,21 +259,12 @@ def _check_coverage(data: Mapping[str, Any], stages: list[_Stage]) -> list[Probl
             consequence = "its items"
         problems.append(
             Problem(
-                stage_where(name, stage.position),
-                f"Stage '{name}' is not listed in `final`, and {cause}, so {consequence} "
-                f"would finish with no final label. Add '{name}' to `final`.",
+                stage_where(stage.name, stage.position),
+                f"Stage '{stage.name}' is not listed in `final`, and {cause}, so {consequence} "
+                f"would finish with no final label. Add '{stage.name}' to `final`.",
             )
         )
     return problems
-
-
-def _takers(stages: list[_Stage], stage: _Stage, outcome: str) -> list[_Stage]:
-    """The stages that take this output of ``stage`` as their input."""
-    return [s for s in stages if s.upstream == stage.name and s.outcome == outcome]
-
-
-def _takes_everything(taker: _Stage) -> bool:
-    return taker.sample == 1
 
 
 def _why_items_can_be_lost(stage: _Stage, stages: list[_Stage]) -> list[str] | None:
@@ -299,36 +272,37 @@ def _why_items_can_be_lost(stage: _Stage, stages: list[_Stage]) -> list[str] | N
 
     An empty list means that no later stage takes the stage's items at all.
     """
-    whole = _takers(stages, stage, "all")
-    if any(_takes_everything(taker) for taker in whole):
+    takers = {
+        outcome: [s for s in stages if s.upstream == stage.name and s.outcome == outcome]
+        for outcome in ("all", "agreed", "disagreed")
+    }
+    if any(taker.takes_everything() for taker in takers["all"]):
         return None
-    reasons = [f"{taker.name} takes only a {percent(taker.sample)} sample" for taker in whole]
+    reasons = [f"{t.name} takes only a {percent(t.sample)} sample" for t in takers["all"]]
 
-    agreed = _takers(stages, stage, "agreed")
-    disagreed = _takers(stages, stage, "disagreed")
     labels = stage.labels_per_item
-    split_by_agreement = type(labels) is int and labels >= 2
-    if split_by_agreement:
-        if any(map(_takes_everything, agreed)) and any(map(_takes_everything, disagreed)):
-            return None
-        if agreed or disagreed:
-            reasons += [
-                _lost_through(stage, "agreed", agreed),
-                _lost_through(stage, "disagreed", disagreed),
-            ]
-    elif agreed or disagreed:
+    if type(labels) is int and labels >= 2:
+        lost = [
+            _lost_through(stage, outcome, takers[outcome]) for outcome in ("agreed", "disagreed")
+        ]
+        if not any(lost):
+            return None  # both sides go on in full
+        if takers["agreed"] or takers["disagreed"]:
+            reasons += [reason for reason in lost if reason]
+    elif takers["agreed"] or takers["disagreed"]:
+        # `all` or `{count, fraction}` may give an item only one label, which has no outcome.
         reasons.append(
             f"some of its items get only one label, so they never reach "
             f"'{stage.name}.agreed' or '{stage.name}.disagreed'"
         )
-    return [reason for reason in reasons if reason]
+    return reasons
 
 
 def _lost_through(stage: _Stage, outcome: str, takers: list[_Stage]) -> str:
     """Say why the agreed (or disagreed) items of a stage do not all go on; empty if they do."""
     if not takers:
         return f"no stage takes '{stage.name}.{outcome}'"
-    if any(map(_takes_everything, takers)):
+    if any(taker.takes_everything() for taker in takers):
         return ""
     sampled = ", ".join(f"{t.name} takes only a {percent(t.sample)} sample" for t in takers)
     return f"{sampled} of '{stage.name}.{outcome}'"

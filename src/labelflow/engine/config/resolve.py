@@ -66,33 +66,20 @@ def resolved_yaml(config: WorkflowConfig) -> str:
     for index, stage in enumerate(resolved["stages"]):
         if index:
             lines.append("")
-        lines += _stage_lines(stage, config.dataset)
-    lines.append("")
-    lines.append(_line("", "final", resolved["final"], _final_comment(resolved["final"])))
+        comments = _stage_comments(stage, config.dataset)
+        for key, value in stage.items():
+            lines.append(_line("  - " if key == "name" else "    ", key, value, comments.get(key)))
+    final = resolved["final"]
+    final_comment = (
+        "this workflow produces no final labels"
+        if final == "none"
+        else "the first listed stage that labeled an item gives its label"
+    )
+    lines += ["", _line("", "final", final, final_comment)]
     return "\n".join(lines) + "\n"
 
 
-def _stage_lines(stage: dict[str, Any], dataset: str) -> list[str]:
-    roles = stage["assign_to"]
-    roles_comment = "anyone holding any of these roles" if len(roles) > 1 else ""
-    labels = stage["labels_per_item"]
-    return [
-        _line("  - ", "name", stage["name"]),
-        _line("    ", "input", stage["input"], _input_comment(stage["input"], dataset)),
-        _line("    ", "assign_to", roles, roles_comment),
-        _line("    ", "sample", stage["sample"], _sample_comment(stage["sample"])),
-        _line("    ", "labels_per_item", labels, _labels_comment(labels)),
-        _line(
-            "    ",
-            "score_against",
-            stage["score_against"],
-            _score_comment(stage["score_against"]),
-        ),
-        _line("    ", "show_prior", stage["show_prior"], _prior_comment(stage["show_prior"])),
-    ]
-
-
-def _line(indent: str, key: str, value: Any, comment: str = "") -> str:
+def _line(indent: str, key: str, value: Any, comment: str | None = None) -> str:
     """One ``key: value`` line, with an optional comment lined up to the right."""
     text = f"{indent}{key}: {_value(value)}"
     return f"{text.ljust(COMMENT_COLUMN)}  # {comment}" if comment else text
@@ -108,21 +95,38 @@ def _value(value: Any) -> str:
     return dumped.removesuffix("\n").removesuffix("\n...")
 
 
+def _stage_comments(stage: dict[str, Any], dataset: str) -> dict[str, str]:
+    """What each setting of a resolved stage does, in a few words."""
+    sample, score_against = stage["sample"], stage["score_against"]
+    return {
+        "input": _input_comment(stage["input"], dataset),
+        "assign_to": "anyone holding any of these roles" if len(stage["assign_to"]) > 1 else "",
+        "sample": (
+            "every arriving item enters"
+            if sample == 1
+            else f"{percent(sample)} of arriving items enter (by hashed draw)"
+        ),
+        "labels_per_item": _labels_comment(stage["labels_per_item"]),
+        "score_against": (
+            "labels are not scored against a key"
+            if score_against is None
+            else f"each label is scored against the item property '{score_against}'"
+        ),
+        "show_prior": (
+            "labelers see earlier labels"
+            if stage["show_prior"]
+            else "blind: labelers do not see earlier labels"
+        ),
+    }
+
+
 def _input_comment(value: str | None, dataset: str) -> str:
     if value is None:
         return f"every item of the dataset '{dataset}'"
     stage, _, outcome = value.partition(".")
-    if outcome == "agreed":
-        return f"items of '{stage}' whose labels agreed"
-    if outcome == "disagreed":
-        return f"items of '{stage}' whose labels disagreed"
+    if outcome:
+        return f"items of '{stage}' whose labels {outcome}"
     return f"every item that completed '{stage}'"
-
-
-def _sample_comment(sample: float) -> str:
-    if sample == 1:
-        return "every arriving item enters"
-    return f"{percent(sample)} of arriving items enter (by hashed draw)"
 
 
 def _labels_comment(labels: Any) -> str:
@@ -135,21 +139,3 @@ def _labels_comment(labels: Any) -> str:
     if labels == 1:
         return "each item is labeled once"
     return f"each item is labeled by {labels} different people"
-
-
-def _score_comment(score_against: str | None) -> str:
-    if score_against is None:
-        return "labels are not scored against a key"
-    return f"each label is scored against the item property '{score_against}'"
-
-
-def _prior_comment(show_prior: bool) -> str:
-    if show_prior:
-        return "labelers see earlier labels"
-    return "blind: labelers do not see earlier labels"
-
-
-def _final_comment(final: list[str] | str) -> str:
-    if final == "none":
-        return "this workflow produces no final labels"
-    return "the first listed stage that labeled an item gives its label"

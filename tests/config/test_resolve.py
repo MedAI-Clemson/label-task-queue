@@ -93,19 +93,6 @@ def test_labels_per_item_forms():
     ]
 
 
-def test_resolve_gives_plain_json_types():
-    config = validate_config((EXAMPLES_DIR / "training_round.yaml").read_text()).config
-    resolved = resolve(config)
-    assert json.loads(json.dumps(resolved)) == resolved
-    assert isinstance(resolved["stages"], list)
-
-
-def test_resolve_can_be_read_back_as_a_config():
-    for path in EXAMPLE_FILES:
-        config = validate_config(path.read_text()).config
-        assert resolve(WorkflowConfig.model_validate(resolve(config))) == resolve(config)
-
-
 @pytest.mark.parametrize("path", EXAMPLE_FILES, ids=lambda path: path.stem)
 def test_resolved_yaml_snapshot(path, assert_snapshot):
     config = validate_config(path.read_text()).config
@@ -113,11 +100,14 @@ def test_resolved_yaml_snapshot(path, assert_snapshot):
 
 
 @pytest.mark.parametrize("path", EXAMPLE_FILES, ids=lambda path: path.stem)
-def test_resolved_yaml_reads_back_to_the_same_config(path):
+def test_the_resolved_view_is_plain_json_and_reads_back_to_the_same_config(path):
     config = validate_config(path.read_text()).config
+    resolved = resolve(config)
+    assert json.loads(json.dumps(resolved)) == resolved
+    assert resolve(WorkflowConfig.model_validate(resolved)) == resolved
     report = validate_config(resolved_yaml(config))
     assert report.ok, report.render()
-    assert resolve(report.config) == resolve(config)
+    assert resolve(report.config) == resolved
     assert resolved_yaml(report.config) == resolved_yaml(config)  # nothing changes on re-reading
 
 

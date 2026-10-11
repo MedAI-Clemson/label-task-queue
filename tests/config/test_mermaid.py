@@ -26,26 +26,6 @@ def test_diagram_snapshot(source, assert_snapshot):
     assert_snapshot(TESTS_DIR / f"{source.stem}.mmd", to_mermaid(config))
 
 
-def test_the_diagram_is_deterministic():
-    config = validate_config((EXAMPLES_DIR / "review_sample.yaml").read_text()).config
-    assert to_mermaid(config) == to_mermaid(config)
-
-
-def test_review_sample_diagram():
-    config = validate_config((EXAMPLES_DIR / "review_sample.yaml").read_text()).config
-    assert to_mermaid(config).splitlines() == [
-        "flowchart TD",
-        '    dataset(["Dataset: xray_batch_1"])',
-        '    stage1["annotate<br/>role: annotator<br/>1 label per item"]',
-        '    stage2["expert_review<br/>role: expert<br/>1 label per item"]',
-        '    final(["Final label"])',
-        "    dataset --> stage1",
-        '    stage1 -->|"20% sample"| stage2',
-        '    stage2 -->|"1st"| final',
-        '    stage1 -->|"2nd"| final',
-    ]
-
-
 def test_edges_are_labeled_with_the_outcome_and_the_sample():
     config = make(
         [

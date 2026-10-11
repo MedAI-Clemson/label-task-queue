@@ -2,10 +2,14 @@
 
 ``validate_config`` never raises for bad input. It returns a ``ConfigReport`` with the
 parsed config (when there are no errors) and every error and warning found, rather than
-stopping at the first.
+stopping at the first. The steps, each adding its problems to the report:
 
-Optionally the config is also checked against what the project already has (its roles,
-datasets and label tasks), with ``ValidationContext``.
+1. Read the YAML text into a document (``_read_source``): syntax errors, repeated keys.
+2. Parse the document with ``WorkflowConfig``: Pydantic's field errors are put into plain
+   words by ``translate.py``, and the graph rules of ``graph.py`` are run on the raw
+   document too, so that both kinds of mistake are reported together.
+3. Optionally, check the config against what the project has (``ValidationContext``):
+   its roles, datasets and label tasks.
 """
 
 from __future__ import annotations
@@ -23,6 +27,7 @@ from labelflow.engine.config.graph import ConfigGraphError, check_graph
 from labelflow.engine.config.models import Stage, WorkflowConfig
 from labelflow.engine.config.problems import (
     Problem,
+    describe,
     percent,
     plural,
     quoted_list,
@@ -31,7 +36,7 @@ from labelflow.engine.config.problems import (
     suggestion,
     top_level,
 )
-from labelflow.engine.config.translate import describe, translate_errors
+from labelflow.engine.config.translate import translate_errors
 
 # --------------------------------------------------------------------------- the report
 
@@ -168,7 +173,6 @@ _YAML_EXPLANATIONS = (
     ),
 )
 
-
 # For these, YAML notices the problem only after the line that is wrong, so point at the
 # line where the unfinished construct (a key, a quote, a bracket) started.
 _REPORT_WHERE_IT_STARTED = (
@@ -230,7 +234,7 @@ def _read_source(source: object) -> tuple[Any, list[Problem]]:
         ]
     loader = None
     try:
-        loader = _Loader(source)
+        loader = _Loader(source)  # already refuses control characters
         data = loader.get_single_data()
     except (yaml.YAMLError, ValueError, OverflowError, RecursionError) as error:
         # ValueError is what PyYAML raises for a date that does not exist, like 2024-13-45.
@@ -260,15 +264,15 @@ def validate_config(
     ``source`` is YAML text or an already-parsed mapping. This never raises for bad input.
     """
     data, errors = _read_source(source)
-    if data is None and not errors:
-        errors = [
+    if data is None:
+        errors = errors or [
             Problem(
                 top_level(),
                 "The file is empty. A workflow config needs `workflow`, `dataset`, "
                 "`label_task` and `stages`.",
             )
         ]
-    elif data is not None and not isinstance(data, Mapping):
+    elif not isinstance(data, Mapping):
         errors = [
             Problem(
                 top_level(),
@@ -279,17 +283,16 @@ def validate_config(
     if not isinstance(data, Mapping):
         return ConfigReport(None, errors)
 
-    config = None
     try:
         config = WorkflowConfig.model_validate(data)
     except ValidationError as error:
-        errors += _problems_from(data, error)
-    if config is not None and context is not None:
+        return ConfigReport(None, errors + _problems_from(data, error))
+    if context is not None:
         errors += check_context(config, context)
     if errors:
         return ConfigReport(None, errors)
     warnings = []
-    if config is not None and context is not None and context.roles is not None:
+    if context is not None and context.roles is not None:
         warnings = role_warnings(config, context.roles)
     return ConfigReport(config, [], warnings)
 
@@ -383,7 +386,8 @@ def _role_shortage(stage: Stage, holders: int) -> str | None:
     the_role = "the role" if len(roles) == 1 else "one of the roles"
     held = the_roles if len(roles) == 1 else f"any of {the_roles}"
 
-    if stage.labels_per_item == "all":
+    labels = stage.labels_per_item
+    if labels == "all":
         if holders:
             return None
         return (
@@ -392,7 +396,11 @@ def _role_shortage(stage: Stage, holders: int) -> str | None:
             f"labeled there. Give {the_role} to the people who should label before starting."
         )
 
-    needed, what = _labels_needed(stage.labels_per_item)
+    if isinstance(labels, int):
+        needed, what = labels, "to label each item"
+    else:
+        needed = labels.count
+        what = f"for the {percent(labels.fraction)} of items chosen to get {labels.count} labels"
     if holders >= needed:
         return None
     people = "someone" if needed == 1 else f"{needed} different people"
@@ -409,21 +417,3 @@ def _role_shortage(stage: Stage, holders: int) -> str | None:
         "Some items will wait for another person, because nobody labels the same item twice. "
         f"Give {the_role} to {more}, or lower `labels_per_item`."
     )
-
-
-def _labels_needed(labels: Any) -> tuple[int, str]:
-    """The number of different people a stage can need for one item, and how to say it."""
-    if isinstance(labels, int):
-        return labels, "to label each item"
-    return labels.count, (
-        f"for the {percent(labels.fraction)} of items chosen to get {labels.count} labels"
-    )
-
-
-__all__ = [
-    "ConfigReport",
-    "ValidationContext",
-    "check_context",
-    "role_warnings",
-    "validate_config",
-]

@@ -28,12 +28,8 @@ def test_example_has_no_errors_and_no_warnings(path):
     assert report.errors == [], report.render()
     assert report.warnings == [], report.render()
     assert report.config.label_task == "image_ontology@1"
-
-
-@pytest.mark.parametrize("path", EXAMPLE_FILES, ids=lambda path: path.stem)
-def test_example_has_no_warnings_when_the_roles_have_enough_people(path):
-    config = validate_config(path.read_text()).config
-    roles = {role: ["ana", "bo", "cy"] for stage in config.stages for role in stage.roles}
+    # Nor with a project context, once the roles have enough people.
+    roles = {role: ["ana", "bo", "cy"] for stage in report.config.stages for role in stage.roles}
     report = validate_config(path.read_text(), ValidationContext(roles=roles))
     assert report.ok and report.warnings == []
 

@@ -238,7 +238,43 @@ def test_the_reviewer_sees_the_earlier_label_as_layers(
     work = json.loads(re.search(r'id="work-data">(.*?)</script>', page, re.S).group(1))
     assert [p["label"] for p in work["packet"]["prior_labels"]] == [label_id]
     assert work["shown"]["prior_label_ids"] == [label_id]
-    assert "and the earlier labels offered as layers" in page
+    assert "the earlier labels offered as layers and the one you started from" in page
+    assert 'id="start-from-help"' in page and 'id="clear-all"' in page
+
+
+def test_the_reviewer_can_start_from_the_earlier_label(
+    ana, dr_smith, app, workflow, expect, simple_label
+):
+    """The page's script sends the start as shown.started_from; the API records it."""
+    engine = app.state.runtime.engine_for("xray")
+    slot = engine.request_work("xray_main", "ana")
+    packet = engine.work_packet("xray_main", slot.slot, "ana")
+    earlier = engine.submit("xray_main", slot.slot, "ana", simple_label(), packet.shown(), 100)
+    location = dr_smith.post("/ui/projects/xray/workflows/xray_main/next").headers["location"]
+    page = expect(dr_smith.get(location))
+    work = json.loads(re.search(r'id="work-data">(.*?)</script>', page, re.S).group(1))
+    assert "started_from" not in work["shown"]  # nothing is started from until a click
+    script = expect(dr_smith.get("/ui/static/label.js"))
+    assert "Start from this layer" in script and "shown.started_from = state.startedFrom" in script
+    other = {"content_hash": work["shown"]["content_hash"], "show_prior": True}
+    refused = dr_smith.post_json(
+        location.removeprefix("/ui") + "/submit",
+        {"label": simple_label(), "shown": other | {"started_from": earlier}},
+    )
+    assert refused.status_code == 422
+    assert "is not among the earlier labels reported as shown" in refused.json()["detail"]
+    body = {"label": simple_label(), "shown": work["shown"] | {"started_from": earlier}}
+    response = dr_smith.post_json(location.removeprefix("/ui") + "/submit", body)
+    assert response.status_code == 201, response.text
+    event = engine.events(type="label_submitted").rows[-1]
+    assert event.user == "dr_smith"
+    assert event.shown.started_from == earlier
+    assert (
+        engine.explain("xray_main", event.item)
+        .render()
+        .count(f"dr_smith started from label {earlier}")
+        == 1
+    )
 
 
 def test_a_blind_stage_shows_no_earlier_label(
@@ -253,6 +289,7 @@ def test_a_blind_stage_shows_no_earlier_label(
     location = dr_smith.post("/ui/projects/xray/workflows/blind/next").headers["location"]
     page = expect(dr_smith.get(location))
     assert "This stage is blind" in page
+    assert "start-from-help" not in page and "Start from this layer" not in page
     work = json.loads(re.search(r'id="work-data">(.*?)</script>', page, re.S).group(1))
     assert work["packet"]["prior_labels"] == []
     assert work["shown"] == {

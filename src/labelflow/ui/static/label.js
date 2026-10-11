@@ -11,6 +11,11 @@
 // What is reported as "shown": the packet's `shown` exactly as the server gave it. The page
 // offers every earlier label of the packet as a layer (a blind stage has none), so the
 // packet's list is what was shown; toggling a layer off does not change the report.
+//
+// "Start from this layer" (one button per earlier label) replaces the editor's masks and
+// classifications with that label's, as one undoable step, and the label then reports it as
+// `shown.started_from`. Undo of that step takes the start back; "Clear all" does not: the
+// labeler did start from it, and the export shows how much of it they kept.
 
 import { Mask, MaskCanvas, MaskSet, paintPolygon, paintStroke, snapToCenter, union } from "./maskcore.js";
 
@@ -54,6 +59,7 @@ export function mount({ work, ontology, page }) {
     renderQueued: false,
     showGrid: true,
     submitting: false,
+    startedFrom: null, // the earlier label copied into the editor, reported as started_from
   };
 
   // --- loading ------------------------------------------------------------------------------
@@ -84,6 +90,11 @@ export function mount({ work, ontology, page }) {
         });
       }
       buildSidebar();
+      state.masks.swapMeta = (meta) => {
+        const now = editorMeta();
+        restoreMeta(meta);
+        return now;
+      };
     }
     resizeCanvas();
     fitView();
@@ -126,29 +137,36 @@ export function mount({ work, ontology, page }) {
       classifications.appendChild(div);
     });
 
+    // Each earlier label: a heading with its "Start from this layer" button, a toggle per
+    // mask class, and its classifications as text.
     const layers = $("layers");
     layers.innerHTML = "";
-    state.priorLayers.forEach((layer, k) => {
-      const li = document.createElement("li");
-      li.innerHTML = `<label><input type="checkbox" checked data-layer="${k}" data-label="${layer.label}" data-class="${esc(layer.name)}">
-        label ${layer.label} (${esc(layer.stage)}) / ${esc(layer.name)} <span class="area">${layer.area} px</span></label>`;
-      li.querySelector("input").addEventListener("change", (e) => {
-        layer.visible = e.target.checked;
-        render();
-      });
-      layers.appendChild(li);
-    });
-    // Earlier classifications, shown as text next to the layers.
-    const seen = new Set();
     for (const prior of packet.show_prior ? packet.prior_labels : []) {
-      if (seen.has(prior.label)) continue;
-      seen.add(prior.label);
+      const head = document.createElement("li");
+      head.className = "layer-head";
+      head.innerHTML = `<span>label ${prior.label} (${esc(prior.stage)})</span>
+        <button type="button" data-start="${prior.label}" title="Replace your masks and classifications with label ${prior.label}'s, to edit from there (one Undo step). Your label records that you started from label ${prior.label}; that stays recorded even if you then use Clear all.">Start from this layer</button>`;
+      head.querySelector("button").addEventListener("click", () => startFrom(prior.label));
+      layers.appendChild(head);
+      state.priorLayers.forEach((layer, k) => {
+        if (layer.label !== prior.label) return;
+        const li = document.createElement("li");
+        li.className = "layer-class";
+        li.innerHTML = `<label><input type="checkbox" checked data-layer="${k}" data-label="${layer.label}" data-class="${esc(layer.name)}">
+          ${esc(layer.name)} <span class="area">${layer.area} px</span></label>`;
+        li.querySelector("input").addEventListener("change", (e) => {
+          layer.visible = e.target.checked;
+          render();
+        });
+        layers.appendChild(li);
+      });
       const values = Object.entries(prior.value.classifications || {});
-      if (!values.length) continue;
-      const li = document.createElement("li");
-      li.className = "muted";
-      li.textContent = `label ${prior.label} (${prior.stage}): ` + values.map(([k, v]) => `${k} = ${v}`).join(", ");
-      layers.appendChild(li);
+      if (values.length) {
+        const li = document.createElement("li");
+        li.className = "layer-class muted";
+        li.textContent = values.map(([k, v]) => `${k} = ${v}`).join(", ");
+        layers.appendChild(li);
+      }
     }
 
     const flags = $("flags");
@@ -350,6 +368,7 @@ export function mount({ work, ontology, page }) {
     if (!state.masks) return;
     const change = state.masks.undo();
     if (change) state.opLog.push({ kind: "undo" });
+    if (change && change.changes) setStatus("Undid the last step.");
     afterHistory(change);
   }
 
@@ -357,14 +376,104 @@ export function mount({ work, ontology, page }) {
     if (!state.masks) return;
     const change = state.masks.redo();
     if (change) state.opLog.push({ kind: "redo" });
+    if (change && change.changes) setStatus("Redid the last step.");
     afterHistory(change);
   }
 
   function afterHistory(change) {
     if (!change) return;
-    state.maskCanvases.get(change.name).refresh(change.box);
+    for (const { name, box } of change.changes || [change]) state.maskCanvases.get(name).refresh(box);
     updateAreas();
     render();
+  }
+
+  // --- starting from an earlier label, and clearing -----------------------------------------
+
+  /** Whether the editor holds anything: a mask pixel or a classification. */
+  function hasDrawing() {
+    if (Object.keys(state.classifications).length) return true;
+    for (const mask of state.masks.masks.values()) if (mask.data.some((v) => v)) return true;
+    return false;
+  }
+
+  /** What a group step restores besides the masks. */
+  function editorMeta() {
+    return { classifications: { ...state.classifications }, startedFrom: state.startedFrom };
+  }
+
+  function restoreMeta(meta) {
+    setClassifications(meta.classifications);
+    setStartedFrom(meta.startedFrom);
+  }
+
+  function setClassifications(values) {
+    state.classifications = {};
+    for (const c of ontology.classifications) setClassification(c.name, values[c.name] ?? "");
+  }
+
+  function setStartedFrom(label) {
+    state.startedFrom = label;
+    const note = $("started-from");
+    if (!note) return;
+    note.hidden = label == null;
+    note.textContent =
+      label == null
+        ? ""
+        : `You started from label ${label}. That is recorded with your label, even if you clear everything; Undo of the start takes it back.`;
+    note.title = label == null ? "" : "Clearing the editor afterwards does not remove this: you did start from it.";
+  }
+
+  /** Replace the masks and classifications with an earlier label's, as one undoable step. */
+  function startFrom(labelId, { confirm = true } = {}) {
+    const prior = packet.show_prior ? packet.prior_labels.find((p) => p.label === labelId) : null;
+    if (!state.masks || !prior) return false;
+    cancelPolygon();
+    const { width, height } = state.masks;
+    const datas = new Map();
+    for (const name of state.masks.masks.keys()) {
+      const encoded = prior.value.masks && prior.value.masks[name];
+      if (!encoded) continue;
+      let mask;
+      try {
+        mask = Mask.fromRLE(encoded);
+      } catch (error) {
+        setStatus(`Label ${labelId} cannot be copied: its ${name} mask could not be decoded (${error.message}).`);
+        return false;
+      }
+      if (mask.width !== width || mask.height !== height) {
+        setStatus(`Label ${labelId} cannot be copied: its ${name} mask is ${mask.width} x ${mask.height}, but the image is ${width} x ${height}.`);
+        return false;
+      }
+      datas.set(name, mask.data);
+    }
+    if (confirm && hasDrawing() && !window.confirm(`Replace what you have drawn and chosen with label ${labelId}? Undo brings your work back.`)) {
+      return false;
+    }
+    const changes = state.masks.replaceAll(datas, editorMeta());
+    const values = {};
+    for (const c of ontology.classifications) {
+      const value = (prior.value.classifications || {})[c.name];
+      if (value != null) values[c.name] = value;
+    }
+    setClassifications(values);
+    setStartedFrom(labelId);
+    state.opLog.push({ kind: "start_from", label: labelId });
+    afterHistory({ changes });
+    setStatus(`Started from label ${labelId} (${prior.stage}): edit it, then submit.`);
+    return true;
+  }
+
+  /** Erase every mask and classification in one undoable step; started_from stays. */
+  function clearAll() {
+    if (!state.masks || !hasDrawing()) return false;
+    cancelPolygon();
+    const changes = state.masks.replaceAll(new Map(), editorMeta());
+    setClassifications({});
+    state.opLog.push({ kind: "clear_all" });
+    afterHistory({ changes });
+    const kept = state.startedFrom == null ? "" : ` You still started from label ${state.startedFrom}; that stays recorded.`;
+    setStatus(`Cleared every mask and classification (Undo brings them back).${kept}`);
+    return true;
   }
 
   function closePolygon() {
@@ -555,6 +664,7 @@ export function mount({ work, ontology, page }) {
   on("brush-size", "input", (e) => setBrush(Number(e.target.value)));
   on("undo", "click", undo);
   on("redo", "click", redo);
+  on("clear-all", "click", clearAll);
   on("fit", "click", fitView);
   on("grid", "change", (e) => {
     state.showGrid = e.target.checked;
@@ -572,6 +682,7 @@ export function mount({ work, ontology, page }) {
       label = JSON.parse($("raw-label").value);
     }
     const shown = { ...work.shown };
+    if (state.startedFrom != null) shown.started_from = state.startedFrom;
     const duration_ms = Math.max(0, Math.round(performance.timeOrigin + performance.now() - state.openedAt));
     return { label, shown, duration_ms };
   }
@@ -680,6 +791,9 @@ export function mount({ work, ontology, page }) {
     undo,
     redo,
     closePolygon,
+    startFrom,
+    clearAll,
+    startedFrom: () => state.startedFrom,
     submit,
     submitBody,
     toggleLayer(label, name, visible) {

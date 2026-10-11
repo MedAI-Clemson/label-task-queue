@@ -13,6 +13,7 @@
   <label>Brush <input type="range" id="brush-size" min="1" max="100" value="12" aria-label="Brush diameter in pixels"> <span id="brush-size-label">12 px</span></label>
   <button type="button" id="undo" title="Ctrl+Z">Undo</button>
   <button type="button" id="redo" title="Ctrl+Shift+Z">Redo</button>
+  <button type="button" id="clear-all" title="Erase every mask and classification in one step (Undo brings them back). If you started from an earlier label, that stays recorded: you did start from it.">Clear all</button>
   <button type="button" id="fit" title="Fit (f)">Fit</button>
   <span id="zoom" aria-live="off">100%</span>
   <label><input type="checkbox" id="grid" checked> Pixel grid at 8x</label>
@@ -32,8 +33,11 @@
     <p class="muted" id="blind">This stage is blind: no earlier labels are shown.</p>
   {% elif not packet.prior_labels %}
     <p class="muted" id="no-prior">No earlier label of this item.</p>
+  {% else %}
+    <p class="muted small" id="start-from-help">"Start from this layer" copies that earlier label's masks and classifications into your editor, replacing what you drew, so you edit it instead of drawing every structure again. Your label records which label you started from.</p>
   {% endif %}
   <ul id="layers" class="plain"></ul>
+  <p class="small" id="started-from" aria-live="polite" hidden></p>
   <h2>Agreement</h2>
   <p id="flags-caption" class="muted"></p>
   <ul id="flags" class="plain"></ul>
@@ -61,7 +65,7 @@
       <button type="submit">Release</button>
     </form>
   </details>
-  <p class="muted small">What you were shown is reported with the label: the image's content hash{% if packet.show_prior %} and the earlier labels offered as layers{% endif %}.</p>
+  <p class="muted small">What you were shown is reported with the label: the image's content hash{% if packet.show_prior %}, the earlier labels offered as layers and the one you started from, if any{% endif %}.</p>
 </aside>
 <footer id="status" role="status" aria-live="polite">Loading the image…</footer>
 <form id="next-form" method="post" action="{{ root }}/projects/{{ project }}/workflows/{{ workflow }}/next" hidden>

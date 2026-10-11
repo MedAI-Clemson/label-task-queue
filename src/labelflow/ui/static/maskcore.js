@@ -283,6 +283,9 @@ export class MaskSet {
     this.redoStack = [];
     this.maxUndo = 50;
     this._editing = null;
+    // Called when a group step (replaceAll) is undone or redone, with the state the step
+    // recorded besides the masks (`meta`); returns the state to record for the way back.
+    this.swapMeta = null;
   }
 
   mask(name) {
@@ -312,6 +315,27 @@ export class MaskSet {
     return edit.dirty;
   }
 
+  /**
+   * Replace every class's mask in one undoable step. `datas` maps class name to the new
+   * data (a Uint8Array of the same size; a class left out becomes empty). `meta` is what the
+   * caller wants restored on undo besides the masks (see swapMeta). Returns the changed
+   * classes as [{name, box}]; a class whose pixels did not change is not in the list.
+   */
+  replaceAll(datas, meta = null) {
+    const parts = [];
+    for (const [name, mask] of this.masks) {
+      const next = datas.get(name) || new Uint8Array(mask.data.length);
+      const box = diffBox(mask.data, next, this.width, this.height);
+      if (!box) continue;
+      parts.push({ name, box, before: crop(mask.data, this.width, box) });
+      mask.data.set(next);
+    }
+    this.undoStack.push({ parts, meta });
+    if (this.undoStack.length > this.maxUndo) this.undoStack.shift();
+    this.redoStack.length = 0;
+    return parts.map(({ name, box }) => ({ name, box }));
+  }
+
   undo() {
     return this._swap(this.undoStack, this.redoStack);
   }
@@ -320,14 +344,27 @@ export class MaskSet {
     return this._swap(this.redoStack, this.undoStack);
   }
 
+  /** Undo or redo one step: {name, box} for a one-class edit, {changes: [{name, box}]}
+   * for a group step. */
   _swap(from, to) {
     const entry = from.pop();
     if (!entry) return null;
-    const mask = this.mask(entry.name);
-    const now = crop(mask.data, this.width, entry.box);
-    paste(mask.data, this.width, entry.box, entry.before);
-    to.push({ name: entry.name, box: entry.box, before: now });
-    return { name: entry.name, box: entry.box };
+    if (entry.parts) {
+      const parts = entry.parts.map((part) => this._swapPart(part));
+      const meta = this.swapMeta && entry.meta ? this.swapMeta(entry.meta) : entry.meta;
+      to.push({ parts, meta });
+      return { changes: parts.map(({ name, box }) => ({ name, box })) };
+    }
+    const part = this._swapPart(entry);
+    to.push(part);
+    return { name: part.name, box: part.box };
+  }
+
+  _swapPart({ name, box, before }) {
+    const mask = this.mask(name);
+    const now = crop(mask.data, this.width, box);
+    paste(mask.data, this.width, box, before);
+    return { name, box, before: now };
   }
 
   toLabelMasks(compressed = true) {
@@ -335,6 +372,24 @@ export class MaskSet {
     for (const [name, mask] of this.masks) out[name] = mask.toRLE(compressed);
     return out;
   }
+}
+
+/** The smallest box holding every pixel where `a` and `b` differ, or null if none does. */
+function diffBox(a, b, width, height) {
+  let box = null;
+  for (let y = 0; y < height; y++) {
+    const row = y * width;
+    let x0 = -1;
+    let x1 = -1;
+    for (let x = 0; x < width; x++) {
+      if (a[row + x] !== b[row + x]) {
+        if (x0 < 0) x0 = x;
+        x1 = x;
+      }
+    }
+    if (x0 >= 0) box = union(box, { x0, y0: y, x1: x1 + 1, y1: y + 1 });
+  }
+  return box;
 }
 
 function crop(data, width, b) {

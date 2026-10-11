@@ -3,9 +3,12 @@
 An administrator sets the project up through the admin pages (accounts, roles, dataset,
 items, the workflow with its live check); an annotator logs in, draws with the brush and the
 polygon, classifies and submits; the expert reviews the sampled image with the annotator's
-label as layers and submits. Then the event log is checked: each label's ``shown`` is exactly
-what the page displayed (content hash, earlier label ids, show_prior), and the annotator's
-masks decode to exactly the pixels the rules say the strokes cover.
+label as layers, starts from that layer ("Start from this layer"; undo, redo and "Clear all"
+are tried on the way), edits one structure and submits. Then the event log is checked: each
+label's ``shown`` is exactly what the page displayed (content hash, earlier label ids,
+show_prior, the label started from), the annotator's masks decode to exactly the pixels the
+rules say the strokes cover, and the expert's label equals the annotator's except the edited
+structure.
 
 It needs Playwright (``pip install playwright==1.48.0``; the version matches the Chromium
 build in ``~/.cache/ms-playwright``, else run ``playwright install chromium``) and is skipped
@@ -15,6 +18,7 @@ without it. Set ``LABELFLOW_SCREENSHOT_DIR`` to keep screenshots of the pages (d
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import socket
 import threading
@@ -216,6 +220,48 @@ def test_the_review_example_in_a_browser(server, browser, media, review_config, 
     def eapi(fn, *args):
         return expert.evaluate("([f, a]) => window.labelflow[f](...a)", [fn, list(args)])
 
+    def editor():
+        """The editor's areas, classification choices and started_from."""
+        return (
+            eapi("area", "lung"),
+            eapi("area", "effusion"),
+            expert.locator("#cls-view").input_value(),
+            expert.locator("#cls-quality").input_value(),
+            eapi("startedFrom"),
+        )
+
+    # start from the annotator's label: its masks and classifications fill the editor
+    (earlier,) = shown_ids
+    start = expert.locator("#layers button[data-start]")
+    assert start.count() == 1 and start.get_attribute("data-start") == str(earlier)
+    assert "Clear all" in start.get_attribute("title")
+    assert expert.locator("#started-from").is_hidden()
+    assert editor() == (0, 0, "", "", None)
+    start.click()
+    started = (97 + 4000, 0, "PA", "good", earlier)
+    assert editor() == started
+    assert f"You started from label {earlier}" in expert.locator("#started-from").inner_text()
+    # one undo step takes the start back, and redo brings it again
+    expert.click("#undo")
+    assert editor() == (0, 0, "", "", None)
+    assert expert.locator("#started-from").is_hidden()
+    expert.click("#redo")
+    assert editor() == started
+    # clearing everything keeps the start recorded (the expert did start from it)
+    assert "stays recorded" in expert.locator("#clear-all").get_attribute("title")
+    expert.click("#clear-all")
+    assert editor() == (0, 0, "", "", earlier)
+    assert expert.locator("#started-from").is_visible()
+    expert.click("#undo")
+    assert editor() == started
+    # starting again over a drawing asks first; saying no changes nothing
+    asked = []
+    expert.once("dialog", lambda dialog: (asked.append(dialog.message), dialog.dismiss()))
+    start.click()
+    assert asked and f"label {earlier}" in asked[0]
+    assert editor() == started
+
+    # edit one structure: an effusion the annotator did not draw
     eapi("setView", 1, 40, 40)
     eapi("selectClass", "effusion")
     eapi("setTool", "polygon")
@@ -224,7 +270,7 @@ def test_the_review_example_in_a_browser(server, browser, media, review_config, 
         expert.mouse.click(c["x"], c["y"])
     expert.keyboard.press("Enter")
     assert eapi("area", "effusion") == 400
-    expert.select_option("#cls-view", "PA")
+    assert eapi("submitBody")["shown"]["started_from"] == earlier
     shot(expert, "reviewer")
     expert_url = expert.url
     expert.click("#submit")
@@ -245,6 +291,7 @@ def test_the_review_example_in_a_browser(server, browser, media, review_config, 
     assert review.shown.content_hash == content_hash
     assert review.shown.prior_label_ids == (first.label_id,) == tuple(shown_ids)
     assert review.shown.show_prior is True
+    assert review.shown.started_from == first.label_id
     assert review.stage == "expert_review" and review.item == "img_001"
 
     # the annotator's masks are exactly the drawn pixels
@@ -255,8 +302,23 @@ def test_the_review_example_in_a_browser(server, browser, media, review_config, 
     assert int(expected.sum()) == 97 + 4000
     assert np.array_equal(lung, expected)
     assert not rle.decode(label["masks"]["effusion"]).any()
+    # the expert's label is the annotator's except the edited structure
+    assert review.label["classifications"] == label["classifications"]
+    assert np.array_equal(rle.decode(review.label["masks"]["lung"]), lung)
     effusion = rle.decode(review.label["masks"]["effusion"])
     assert np.array_equal(effusion, rectangle(512, 200, 200, 220, 220))
+    # and the labels export says so: the start and how far the label moved from it
+    exported = engine.export_labels("xray_main")[1]
+    assert exported["started_from"] == first.label_id
+    changed = json.loads(exported["changed_from_start"])
+    assert changed["agreed"] is False
+    assert changed["detail"]["masks"]["lung"]["min_iou"] == 1.0
+    assert changed["detail"]["masks"]["effusion"]["min_iou"] == 0.0
+    assert all(c["agreed"] for c in changed["detail"]["classifications"].values())
+    assert (
+        f"dr_smith started from label {first.label_id}"
+        in engine.explain("xray_main", "img_001").render()
+    )
 
     # the review label is img_001's final label
     explanation = engine.explain("xray_main", "img_001")

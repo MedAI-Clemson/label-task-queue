@@ -1,22 +1,58 @@
-"""Read helpers over the derived tables, shared by the engine, explain and the exports."""
+"""Read helpers over the derived tables, shared by the engine, flow, explain and the exports.
+
+Each ``*_row`` helper looks one row up and raises the engine's ``NotFound`` error, with a
+suggestion, when it is missing; the rest answer small questions the commands keep asking.
+"""
 
 from __future__ import annotations
 
-import difflib
 from collections.abc import Iterable
 from datetime import datetime
 
-from labelflow.engine.config import Stage, WorkflowConfig
-from labelflow.engine.errors import UnknownItem, UnknownStage, UnknownWorkflow
+from labelflow.engine.config import Stage, WorkflowConfig, did_you_mean
+from labelflow.engine.errors import (
+    UnknownDataset,
+    UnknownItem,
+    UnknownRole,
+    UnknownSlot,
+    UnknownStage,
+    UnknownWorkflow,
+)
 from labelflow.engine.tables import Row, Tables
 
 _CONFIGS: dict[str, WorkflowConfig] = {}
 """Parsed configs by content hash. Safe to share: the same hash always means the same config."""
 
 
-def did_you_mean(name: str, known: Iterable[str]) -> str:
-    close = difflib.get_close_matches(name, list(known), n=1)
-    return f" Did you mean '{close[0]}'?" if close else ""
+def when(text: str) -> str:
+    """A stored timestamp for a sentence: ``2026-10-10 09:00 UTC``."""
+    return datetime.fromisoformat(text).strftime("%Y-%m-%d %H:%M UTC")
+
+
+# --- the project ----------------------------------------------------------------------------
+
+
+def role_row(tables: Tables, role: str) -> Row:
+    row = tables.get("roles", role=role)
+    if row is None:
+        known = [r["role"] for r in tables.select("roles")]
+        raise UnknownRole(
+            f"There is no role named '{role}'; define it first.{did_you_mean(role, known)}"
+        )
+    return row
+
+
+def dataset_row(tables: Tables, dataset: str) -> Row:
+    row = tables.get("datasets", dataset=dataset)
+    if row is None:
+        known = [r["dataset"] for r in tables.select("datasets")]
+        raise UnknownDataset(
+            f"There is no dataset named '{dataset}'.{did_you_mean(dataset, known)}"
+        )
+    return row
+
+
+# --- workflows and their configs ----------------------------------------------------------
 
 
 def workflow_row(tables: Tables, workflow: str) -> Row:
@@ -48,10 +84,8 @@ def active_config(tables: Tables, workflow: str) -> tuple[int, WorkflowConfig]:
 
 def stages_ever(tables: Tables, workflow: str) -> list[Stage]:
     """Every stage the workflow has had: the active version's stages in order, then the
-    stages that edits removed, as last configured.
-
-    Reports use it so that a removed stage's history stays visible.
-    """
+    stages that edits removed, as last configured. Reports use it so that a removed stage's
+    history stays visible."""
     active, config = active_config(tables, workflow)
     stages = list(config.stages)
     seen = set(config.stage_names)
@@ -73,6 +107,9 @@ def stage_of(config: WorkflowConfig, stage: str) -> Stage:
         ) from None
 
 
+# --- items and slots ----------------------------------------------------------------------
+
+
 def workflow_item(tables: Tables, workflow: str, item: str) -> Row:
     """The item's row in the workflow; raises UnknownItem if it never entered it."""
     row = tables.get("workflow_items", workflow=workflow, item=item)
@@ -89,6 +126,49 @@ def item_row(tables: Tables, workflow: str, item: str) -> Row:
     if row is None:
         raise UnknownItem(f"Dataset '{dataset}' has no item '{item}'.")
     return row
+
+
+def slot_row(tables: Tables, workflow: str, slot: int) -> Row:
+    """The slot, which must belong to the workflow."""
+    workflow_row(tables, workflow)
+    row = tables.get("slots", slot=slot)
+    if row is None or row["workflow"] != workflow:
+        raise UnknownSlot(f"Workflow '{workflow}' has no slot {slot}.")
+    return row
+
+
+def labels_of(tables: Tables, workflow: str, item: str, stage: str | None = None) -> list[Row]:
+    """The item's labels in the workflow (optionally one stage), in submission order."""
+    where = {"workflow": workflow, "item": item} | ({"stage": stage} if stage else {})
+    return sorted(tables.select("labels", **where), key=lambda r: r["label"])
+
+
+def live_slots(tables: Tables, workflow: str, item: str, stage: str | None = None) -> list[Row]:
+    """The item's open or claimed slots in the workflow (optionally one stage), by id."""
+    where = {"workflow": workflow, "item": item} | ({"stage": stage} if stage else {})
+    rows = tables.select("slots", status="open", **where)
+    rows += tables.select("slots", status="claimed", **where)
+    return sorted(rows, key=lambda r: r["slot"])
+
+
+def next_id(tables: Tables, name: str) -> int:
+    """The next unused slot or label id."""
+    row = tables.get("counters", name=name)
+    return 1 if row is None else row["value"] + 1
+
+
+def export_status(tables: Tables, workflow: str, item: str) -> str:
+    """in_progress, excluded, or the final-label status: final, unresolved or none.
+
+    An item excluded after it was finalized is ``excluded``: the exclusion is the later word.
+    """
+    status = workflow_item(tables, workflow, item)["status"]
+    if status != "done":
+        return status
+    return tables.get("final_labels", workflow=workflow, item=item)["status"]
+
+
+# --- people and roles ---------------------------------------------------------------------
 
 
 def held_roles(tables: Tables, user: str) -> set[str]:
@@ -111,24 +191,7 @@ def role_holders(tables: Tables) -> dict[str, list[str]]:
     return {r["role"]: holders(tables, [r["role"]]) for r in tables.select("roles")}
 
 
-def labels_of(tables: Tables, workflow: str, item: str, stage: str | None = None) -> list[Row]:
-    """The item's labels in the workflow (optionally one stage), in submission order."""
-    where = {"workflow": workflow, "item": item} | ({"stage": stage} if stage else {})
-    return sorted(tables.select("labels", **where), key=lambda r: r["label"])
-
-
-def live_slots(tables: Tables, workflow: str, item: str, stage: str | None = None) -> list[Row]:
-    """The item's open or claimed slots in the workflow (optionally one stage), by id."""
-    where = {"workflow": workflow, "item": item} | ({"stage": stage} if stage else {})
-    rows = tables.select("slots", status="open", **where)
-    rows += tables.select("slots", status="claimed", **where)
-    return sorted(rows, key=lambda r: r["slot"])
-
-
-def next_id(tables: Tables, name: str) -> int:
-    """The next unused slot or label id."""
-    row = tables.get("counters", name=name)
-    return 1 if row is None else row["value"] + 1
+# --- pauses -------------------------------------------------------------------------------
 
 
 def active_pause(tables: Tables, workflow: str, stage: str | None = None) -> Row | None:
@@ -155,24 +218,4 @@ def blocking_pauses(tables: Tables, workflow: str, stage: str) -> list[str]:
 
 def pause_text(row: Row) -> str:
     """``by root since 2026-10-10 09:00 UTC: scanner recalibration``."""
-    since = datetime.fromisoformat(row["at"]).strftime("%Y-%m-%d %H:%M UTC")
-    return f"by {row['by']} since {since}: {row['reason']}"
-
-
-def export_status(tables: Tables, workflow: str, item: str) -> str:
-    """in_progress, excluded, or the final-label status: final, unresolved or none.
-
-    An item excluded after it was finalized is ``excluded``: the exclusion is the later word.
-    """
-    status = workflow_item(tables, workflow, item)["status"]
-    if status != "done":
-        return status
-    return tables.get("final_labels", workflow=workflow, item=item)["status"]
-
-
-def and_list(names: Iterable[str], conjunction: str = "and") -> str:
-    """``a``, ``a and b``, ``a, b and c``."""
-    names = list(names)
-    if len(names) <= 1:
-        return "".join(names)
-    return f"{', '.join(names[:-1])} {conjunction} {names[-1]}"
+    return f"by {row['by']} since {when(row['at'])}: {row['reason']}"

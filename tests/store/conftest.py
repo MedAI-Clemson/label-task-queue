@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Iterator
-from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -12,20 +11,10 @@ import pytest
 import sqlalchemy as sa
 
 from labelflow.engine import Engine, Store
+from labelflow.engine.simulate import FixedClock
 from labelflow.labeltask import LabelTaskRegistry
 from labelflow.labeltask.standin import StandInLabelTask
 from labelflow.store import SqlStore, connect, create_schema
-
-
-class FakeClock:
-    """A clock that moves one minute forward each time it is read."""
-
-    def __init__(self) -> None:
-        self.now = datetime(2026, 10, 10, 9, 0, tzinfo=UTC)
-
-    def __call__(self) -> datetime:
-        current, self.now = self.now, self.now + timedelta(minutes=1)
-        return current
 
 
 @pytest.fixture
@@ -82,7 +71,7 @@ def make_engine(
 ) -> Engine:
     """An engine with a deterministic clock and a small project: roles, people, a dataset
     of ``items`` items and a started workflow (by default the two-stage ``CONFIG``)."""
-    engine = Engine(store, LabelTaskRegistry([task or StandInLabelTask()]), clock=FakeClock())
+    engine = Engine(store, LabelTaskRegistry([task or StandInLabelTask()]), clock=FixedClock())
     for role in ("annotator", "expert"):
         engine.define_role(role, "admin")
     for user, role in PEOPLE.items():

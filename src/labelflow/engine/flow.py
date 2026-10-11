@@ -21,11 +21,10 @@ from datetime import datetime
 from typing import Any
 
 from labelflow.engine import events as ev
-from labelflow.engine.config import LabelsFraction, Stage
+from labelflow.engine.config import LabelsFraction, Stage, and_list
 from labelflow.engine.draws import draw
 from labelflow.engine.queries import (
     active_config,
-    and_list,
     config_at,
     holders,
     labels_of,
@@ -74,8 +73,12 @@ class Flow:
 
     # --- entry points used by the engine --------------------------------------------------
 
-    def enter(self, item: str, because: str) -> None:
-        """An item of the dataset enters the workflow and arrives at the root stages."""
+    def enter(self, item: str, reason: str) -> None:
+        """An item of the dataset enters the workflow and arrives at the root stages.
+
+        ``reason`` says why now: it was in the dataset at the start, or imported later.
+        """
+        because = f"{self.workflow}.dataset = {self.dataset}; {reason}"
         self._emit(ev.ItemEntered, item=item, dataset=self.dataset, because=because)
         for stage in self.config.root_stages:
             cause = f"{stage.name} has no input, so it takes every item of the dataset"

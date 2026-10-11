@@ -44,16 +44,17 @@ from pydantic import BaseModel, ConfigDict, JsonValue
 from labelflow.engine.config import (
     ValidationContext,
     WorkflowConfig,
+    and_list,
+    percent,
+    plural,
     resolve,
     resolved_yaml,
     validate_config,
 )
-from labelflow.engine.config.problems import percent, plural
 from labelflow.engine.draws import draw
 from labelflow.engine.queries import (
     active_config,
     active_pause,
-    and_list,
     config_at,
     held_roles,
     pause_text,

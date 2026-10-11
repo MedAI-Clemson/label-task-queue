@@ -13,14 +13,14 @@ usually a small, local change.
 | # | Milestone | Status | Where |
 | --- | --- | --- | --- |
 | 0 | Scaffold | Done, except the `v0-prototype` tag (see below) | `pyproject.toml`, `.github/workflows/ci.yml` |
-| 0b | Interface spike | Not started. Mask tools are decided (brush and polygon); the spike picks the library | |
+| 0b | Interface spike | Done: plain Canvas 2D plus an owned mask module (no library rasterizes to the pixel grid); see [`interface-spike.md`](interface-spike.md) | `spikes/mask-tools/` |
 | 1 | Config | Done | `src/labelflow/engine/config/`, `schema/`, `examples/workflows/` |
 | 2 | Engine core | Done | `src/labelflow/engine/` |
 | 3 | Built-in label task | Done | `src/labelflow/labeltask/`, `examples/ontologies/` |
 | 4 | Storage | Done (SQLite only) | `src/labelflow/store/`, `alembic.ini` |
 | 5 | Versioning and edits | Done | `src/labelflow/engine/edits.py` |
 | 6 | API | Done (Docker image not built in CI) | `src/labelflow/api/` |
-| 7 | Interface | Not started: waits on 0b | |
+| 7 | Interface | Not started; unblocked by 0b | |
 | 8 | Pilot | Not started | |
 
 **The prototype tag.** The prototype was removed on the Phase 1 branch. Its last commit

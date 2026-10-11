@@ -15,12 +15,11 @@ import sqlalchemy as sa
 
 from labelflow.api import db
 from labelflow.engine import UnknownDataset, UnknownRole
-from labelflow.engine.config import resolved_yaml, to_mermaid
+from labelflow.engine.config import did_you_mean, resolved_yaml, to_mermaid
 from labelflow.engine.queries import (
     active_config,
     active_pause,
     config_at,
-    did_you_mean,
     held_roles,
     role_holders,
     workflow_row,

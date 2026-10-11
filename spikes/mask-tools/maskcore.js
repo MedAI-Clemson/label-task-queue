@@ -8,7 +8,10 @@
 // Rasterization rules (the "pixel center" convention):
 //   * Pixel (x, y) covers the square [x, x+1) x [y, y+1) of image space; its center is
 //     (x + 0.5, y + 0.5). Pointer positions are continuous image coordinates, never snapped.
-//   * Brush dot at p with diameter d: pixels whose center c has |c - p| <= d / 2.
+//   * The brush is centered on the CENTER of the pixel under the pointer (snapToCenter), so a
+//     1 px brush always paints exactly that pixel and every brush dot is a symmetric disk.
+//   * Brush dot at (snapped) p with diameter d: pixels whose center c has |c - p| <= d / 2.
+//     For d = 11 that is the 97 pixels with integer offsets dx^2 + dy^2 <= 30.25.
 //   * Brush stroke from p0 to p1: pixels whose center is within d / 2 of the segment (a
 //     capsule). A stroke of n points is the union of its n - 1 capsules; a stroke of one
 //     point is a dot.
@@ -182,9 +185,16 @@ export function paintCapsule(mask, ax, ay, bx, by, radius, value) {
   return box(x0, y0, x1 + 1, y1 + 1, width, height);
 }
 
-/** Paint or erase a polyline stroke of diameter d (dot for one point, capsules otherwise). */
-export function paintStroke(mask, points, diameter, value) {
+/** The center of the pixel an image-space point falls in: where the brush is centered. */
+export function snapToCenter([x, y]) {
+  return [Math.floor(x) + 0.5, Math.floor(y) + 0.5];
+}
+
+/** Paint or erase a polyline stroke of diameter d (dot for one point, capsules otherwise).
+ * The points are snapped to pixel centers first. */
+export function paintStroke(mask, rawPoints, diameter, value) {
   const radius = diameter / 2;
+  const points = rawPoints.map(snapToCenter);
   if (points.length === 0) return null;
   if (points.length === 1) return paintDisk(mask, points[0][0], points[0][1], radius, value);
   let dirty = null;

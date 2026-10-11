@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from ltq.labeltask import OntologyLabelTask, load_ontology, rle
+from labelflow.labeltask import OntologyLabelTask, load_ontology, rle
 
 EXAMPLE_ONTOLOGIES = Path(__file__).resolve().parents[2] / "examples" / "ontologies"
 

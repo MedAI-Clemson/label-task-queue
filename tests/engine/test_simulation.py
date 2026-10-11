@@ -10,8 +10,8 @@ from collections import Counter, defaultdict
 
 import pytest
 
-from ltq.engine import draw, rebuild, verify_chain
-from ltq.engine.simulate import SimulatedLabeler, simulate
+from labelflow.engine import draw, rebuild, verify_chain
+from labelflow.engine.simulate import SimulatedLabeler, simulate
 
 VALUES = ("normal", "effusion", "nodule")
 

@@ -2,7 +2,7 @@
 
 import pytest
 
-from ltq.engine import (
+from labelflow.engine import (
     InvalidLabel,
     InvalidRequest,
     InvalidShown,

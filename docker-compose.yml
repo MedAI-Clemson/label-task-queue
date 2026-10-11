@@ -8,16 +8,16 @@ services:
       # The ontology files (the label tasks). The image has the examples built in.
       - ./examples/ontologies:/ontologies:ro
       # To let the server hash images when items are imported, mount them and set
-      # LTQ_MEDIA_ROOT below:
+      # LABELFLOW_MEDIA_ROOT below:
       # - /path/to/images:/media:ro
     environment:
-      - DATABASE_URI=sqlite:////db/ltq.db
-      - LTQ_LABEL_TASKS=/ontologies
-      # - LTQ_MEDIA_ROOT=/media
-      # - LTQ_SESSION_HOURS=12
-      # - LTQ_COOKIE_SECURE=true   # when the service is reached over https
+      - DATABASE_URI=sqlite:////db/labelflow.db
+      - LABELFLOW_LABEL_TASKS=/ontologies
+      # - LABELFLOW_MEDIA_ROOT=/media
+      # - LABELFLOW_SESSION_HOURS=12
+      # - LABELFLOW_COOKIE_SECURE=true   # when the service is reached over https
 
 # The container runs `alembic upgrade head` each time it starts. To make the first
 # administrator account (once):
 #   docker compose run --rm app sh -c \
-#     "alembic upgrade head && python -m ltq.api.admin create-admin <username>"
+#     "alembic upgrade head && python -m labelflow.api.admin create-admin <username>"

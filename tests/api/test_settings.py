@@ -13,16 +13,16 @@ from alembic import command
 from alembic.config import Config
 from fastapi.testclient import TestClient
 
-from ltq.api import Settings, create_app
-from ltq.api import app as module_app
-from ltq.labeltask import OntologyError
+from labelflow.api import Settings, create_app
+from labelflow.api import app as module_app
+from labelflow.labeltask import OntologyError
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_the_defaults():
     settings = Settings.from_env({})
-    assert settings.database_uri == "sqlite:///./db/ltq.db"
+    assert settings.database_uri == "sqlite:///./db/labelflow.db"
     assert settings.label_tasks == Path("./ontologies")
     assert settings.media_root is None
     assert settings.session_lifetime == timedelta(hours=12)
@@ -34,16 +34,16 @@ def test_the_defaults():
 def test_everything_can_be_set_from_the_environment():
     settings = Settings.from_env(
         {
-            "DATABASE_URI": "sqlite:////data/ltq.db",
-            "LTQ_LABEL_TASKS": "/etc/ltq/ontologies",
-            "LTQ_MEDIA_ROOT": "/mnt/images",
-            "LTQ_SESSION_HOURS": "0.5",
-            "LTQ_COOKIE_SECURE": "Yes",
-            "LTQ_SQLITE_SYNCHRONOUS": "NORMAL",
+            "DATABASE_URI": "sqlite:////data/labelflow.db",
+            "LABELFLOW_LABEL_TASKS": "/etc/labelflow/ontologies",
+            "LABELFLOW_MEDIA_ROOT": "/mnt/images",
+            "LABELFLOW_SESSION_HOURS": "0.5",
+            "LABELFLOW_COOKIE_SECURE": "Yes",
+            "LABELFLOW_SQLITE_SYNCHRONOUS": "NORMAL",
         }
     )
-    assert settings.database_uri == "sqlite:////data/ltq.db"
-    assert settings.label_tasks == Path("/etc/ltq/ontologies")
+    assert settings.database_uri == "sqlite:////data/labelflow.db"
+    assert settings.label_tasks == Path("/etc/labelflow/ontologies")
     assert settings.media_root == Path("/mnt/images")
     assert settings.session_lifetime == timedelta(minutes=30)
     assert settings.cookie_secure is True
@@ -52,26 +52,26 @@ def test_everything_can_be_set_from_the_environment():
 
 def test_empty_values_mean_the_default():
     settings = Settings.from_env(
-        {"DATABASE_URI": " ", "LTQ_MEDIA_ROOT": "", "LTQ_SESSION_HOURS": ""}
+        {"DATABASE_URI": " ", "LABELFLOW_MEDIA_ROOT": "", "LABELFLOW_SESSION_HOURS": ""}
     )
     assert settings == Settings()
 
 
 def test_the_process_environment_is_read_by_default(monkeypatch):
-    monkeypatch.setenv("LTQ_MEDIA_ROOT", "/somewhere")
+    monkeypatch.setenv("LABELFLOW_MEDIA_ROOT", "/somewhere")
     assert Settings.from_env().media_root == Path("/somewhere")
 
 
 @pytest.mark.parametrize("hours", ["0", "-3", "soon", "nan", "inf"])
 def test_a_bad_session_lifetime_is_refused(hours):
-    with pytest.raises(ValueError, match="LTQ_SESSION_HOURS must be a positive number"):
-        Settings.from_env({"LTQ_SESSION_HOURS": hours})
+    with pytest.raises(ValueError, match="LABELFLOW_SESSION_HOURS must be a positive number"):
+        Settings.from_env({"LABELFLOW_SESSION_HOURS": hours})
 
 
 def test_a_bad_flag_is_refused():
-    with pytest.raises(ValueError, match="LTQ_COOKIE_SECURE must be true or false"):
-        Settings.from_env({"LTQ_COOKIE_SECURE": "perhaps"})
-    assert Settings.from_env({"LTQ_COOKIE_SECURE": "off"}).cookie_secure is False
+    with pytest.raises(ValueError, match="LABELFLOW_COOKIE_SECURE must be true or false"):
+        Settings.from_env({"LABELFLOW_COOKIE_SECURE": "perhaps"})
+    assert Settings.from_env({"LABELFLOW_COOKIE_SECURE": "off"}).cookie_secure is False
 
 
 def test_a_zero_lifetime_is_refused_when_building_settings_directly():
@@ -90,7 +90,7 @@ def test_the_health_check_answers_without_a_login(client):
 
 
 def test_the_health_check_needs_neither_a_login_nor_a_database(tmp_path):
-    app = create_app(Settings(database_uri=f"sqlite:///{tmp_path}/none/ltq.db"))
+    app = create_app(Settings(database_uri=f"sqlite:///{tmp_path}/none/labelflow.db"))
     response = TestClient(app).get("/health")  # no startup, so nothing is opened
     assert response.json() == {"status": "ok"}
     assert not (tmp_path / "none").exists()
@@ -148,7 +148,7 @@ def test_startup_stops_when_the_database_is_out_of_date(settings, tmp_path):
 def test_the_database_folder_is_made_when_it_is_missing(settings, tmp_path):
     folder = tmp_path / "var" / "db"
     ontology_folder(settings)
-    app = create_app(replace(settings, database_uri=f"sqlite:///{folder / 'ltq.db'}"))
+    app = create_app(replace(settings, database_uri=f"sqlite:///{folder / 'labelflow.db'}"))
     with pytest.raises(RuntimeError, match="not set up"), TestClient(app):
         pass
     assert folder.is_dir()

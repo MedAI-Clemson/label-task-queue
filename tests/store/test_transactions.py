@@ -7,10 +7,10 @@ import threading
 import pytest
 import sqlalchemy as sa
 
-from ltq.engine import AlreadyExists
-from ltq.engine import events as ev
-from ltq.labeltask.standin import StandInLabelTask
-from ltq.store import SqlStore, connect
+from labelflow.engine import AlreadyExists
+from labelflow.engine import events as ev
+from labelflow.labeltask.standin import StandInLabelTask
+from labelflow.store import SqlStore, connect
 
 
 def a_dataset_event(name: str) -> ev.DatasetCreated:
@@ -181,7 +181,7 @@ def test_connect_settings(url):
     finally:
         engine.dispose()
     with pytest.raises(ValueError, match="SQLite"):
-        connect("postgresql://localhost/ltq")
+        connect("postgresql://localhost/labelflow")
     with pytest.raises(ValueError, match="synchronous"):
         connect(url, synchronous="sometimes")
 

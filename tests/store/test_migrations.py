@@ -1,7 +1,7 @@
 """The Alembic migrations create the same database as ``create_schema``.
 
 The initial migration is a written-out copy of the schema. These tests fail when the tables
-declared in ``ltq.engine.tables.SCHEMA`` (or the store's constraints and triggers) change
+declared in ``labelflow.engine.tables.SCHEMA`` (or the store's constraints and triggers) change
 without a new migration revision.
 """
 
@@ -20,9 +20,9 @@ from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
 
-from ltq.engine import SCHEMA, Table
-from ltq.store import SqlStore, connect, create_schema
-from ltq.store.schema import TRIGGERS, build_metadata
+from labelflow.engine import SCHEMA, Table
+from labelflow.store import SqlStore, connect, create_schema
+from labelflow.store.schema import TRIGGERS, build_metadata
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -31,7 +31,7 @@ To bring the migrations up to date, add a new revision (never edit one that has 
 been applied to a database):
   1. DATABASE_URI=sqlite:///scratch.db alembic upgrade head
   2. DATABASE_URI=sqlite:///scratch.db alembic revision --autogenerate -m "what changed"
-  3. Open the new file in src/ltq/store/migrations/versions/ and check it. Autogenerate does
+  3. Open the new file in src/labelflow/store/migrations/versions/ and check it. Autogenerate does
      not see triggers or the WHERE of a partial index: write those out with op.execute(...).
   4. Run this test again.
 """
@@ -80,7 +80,7 @@ def test_upgrading_creates_the_tables_the_code_expects(migrated):
         differences = compare_metadata(context, build_metadata())
     assert not differences, (
         "The migrations no longer match the tables the store builds from "
-        "ltq.engine.tables.SCHEMA. Differences found by Alembic:\n  "
+        "labelflow.engine.tables.SCHEMA. Differences found by Alembic:\n  "
         + "\n  ".join(map(describe, differences))
         + "\n"
         + HOW_TO_FIX
@@ -108,7 +108,7 @@ def test_the_triggers_and_indexes_match_the_code(migrated, tmp_path):
             expected, found = schema_objects(reference, kind), schema_objects(migrated, kind)
             different = sorted(k for k in found.keys() & expected.keys() if found[k] != expected[k])
             assert found == expected, (
-                f"The {kind}s created by the migrations differ from ltq.store.schema.\n"
+                f"The {kind}s created by the migrations differ from labelflow.store.schema.\n"
                 f"  only in the code: {sorted(expected.keys() - found.keys())}\n"
                 f"  only in the migrations: {sorted(found.keys() - expected.keys())}\n"
                 f"  different SQL: {different}\n" + HOW_TO_FIX
@@ -206,10 +206,10 @@ def test_the_database_url_comes_from_the_environment(tmp_path, monkeypatch):
         engine.dispose()
 
 
-def test_the_default_database_is_ltq_db_in_the_current_directory(tmp_path, monkeypatch):
+def test_the_default_database_is_labelflow_db_in_the_current_directory(tmp_path, monkeypatch):
     monkeypatch.delenv("DATABASE_URI", raising=False)
     monkeypatch.chdir(tmp_path)
     config = Config(str(ROOT / "alembic.ini"))
     config.attributes["configure_logger"] = False
     command.upgrade(config, "head")
-    assert (tmp_path / "ltq.db").exists()
+    assert (tmp_path / "labelflow.db").exists()

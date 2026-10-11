@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 import yaml
 
-from ltq.engine import draw
+from labelflow.engine import draw
 
 REVIEW = yaml.safe_load(
     """

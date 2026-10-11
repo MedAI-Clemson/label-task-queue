@@ -9,8 +9,8 @@ import re
 import pytest
 from pydantic import BaseModel
 
-import ltq.api.routes
-from ltq.api.app import TAGS
+import labelflow.api.routes
+from labelflow.api.app import TAGS
 
 METHODS = ("get", "post", "put", "patch", "delete")
 
@@ -118,9 +118,9 @@ def test_operation_ids_are_unique_and_readable(spec):
 def api_models():
     """Every request and response model the API defines (not the engine's own)."""
     found = {}
-    modules = [importlib.import_module("ltq.api.errors")]
-    for info in pkgutil.iter_modules(ltq.api.routes.__path__):
-        modules.append(importlib.import_module(f"ltq.api.routes.{info.name}"))
+    modules = [importlib.import_module("labelflow.api.errors")]
+    for info in pkgutil.iter_modules(labelflow.api.routes.__path__):
+        modules.append(importlib.import_module(f"labelflow.api.routes.{info.name}"))
     for module in modules:
         for name, value in vars(module).items():
             is_model = isinstance(value, type) and issubclass(value, BaseModel)
@@ -144,7 +144,7 @@ def test_logging_in_is_part_of_the_documented_security(spec):
     assert schemes["APIKeyCookie"] == {
         "type": "apiKey",
         "in": "cookie",
-        "name": "ltq_session",
+        "name": "labelflow_session",
         "description": "The login cookie set by `POST /auth/login` (used by the web pages).",
     }
     me = spec["paths"]["/auth/me"]["get"]

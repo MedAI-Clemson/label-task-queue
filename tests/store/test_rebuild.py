@@ -7,9 +7,9 @@ import sys
 
 import pytest
 
-from ltq.engine import BrokenChain
-from ltq.store import SqlStore
-from ltq.store.rebuild import main
+from labelflow.engine import BrokenChain
+from labelflow.store import SqlStore
+from labelflow.store.rebuild import main
 
 
 @pytest.fixture
@@ -158,13 +158,13 @@ def test_the_command_reports_a_missing_database(tmp_path, capsys):
     assert main([f"sqlite:///{missing}", "--project", "demo"]) == 2
     assert "does not exist" in capsys.readouterr().err
     assert not missing.exists()
-    assert main(["postgresql://localhost/ltq", "--project", "demo"]) == 2
+    assert main(["postgresql://localhost/labelflow", "--project", "demo"]) == 2
     assert "SQLite" in capsys.readouterr().err
 
 
 def test_the_command_runs_as_a_module(url, project):
     run = subprocess.run(
-        [sys.executable, "-m", "ltq.store.rebuild", url, "--project", "demo"],
+        [sys.executable, "-m", "labelflow.store.rebuild", url, "--project", "demo"],
         capture_output=True,
         text=True,
         timeout=60,

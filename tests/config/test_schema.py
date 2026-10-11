@@ -5,12 +5,12 @@ import subprocess
 import sys
 from pathlib import Path
 
-from ltq.engine.config import config_json_schema, config_json_schema_text, validate_config
+from labelflow.engine.config import config_json_schema, config_json_schema_text, validate_config
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE_FILES = sorted((REPO_ROOT / "examples" / "workflows").glob("*.yaml"))
 SCHEMA_FILE = REPO_ROOT / "schema" / "workflow-config.schema.json"
-REGENERATE = "python -m ltq.engine.config.schema > schema/workflow-config.schema.json"
+REGENERATE = "python -m labelflow.engine.config.schema > schema/workflow-config.schema.json"
 
 
 def test_the_committed_schema_is_up_to_date():
@@ -29,7 +29,7 @@ def test_the_schema_file_is_pretty_printed_and_sorted():
 
 def test_the_module_prints_the_same_schema():
     result = subprocess.run(
-        [sys.executable, "-W", "error", "-m", "ltq.engine.config.schema"],
+        [sys.executable, "-W", "error", "-m", "labelflow.engine.config.schema"],
         capture_output=True,
         text=True,
         cwd=REPO_ROOT,

@@ -6,9 +6,9 @@ from __future__ import annotations
 import pytest
 import sqlalchemy as sa
 
-from ltq.engine import events as ev
-from ltq.engine.events import GENESIS_HASH as GENESIS
-from ltq.store import SqlStore
+from labelflow.engine import events as ev
+from labelflow.engine.events import GENESIS_HASH as GENESIS
+from labelflow.store import SqlStore
 
 REFUSED = sa.exc.IntegrityError
 

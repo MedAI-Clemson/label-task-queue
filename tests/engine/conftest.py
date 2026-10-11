@@ -15,10 +15,10 @@ from typing import Any
 
 import pytest
 
-from ltq.engine import Engine, InMemoryStore, Store
-from ltq.labeltask import LabelTaskRegistry
-from ltq.labeltask.standin import StandInLabelTask
-from ltq.store import SqlStore, connect, create_schema
+from labelflow.engine import Engine, InMemoryStore, Store
+from labelflow.labeltask import LabelTaskRegistry
+from labelflow.labeltask.standin import StandInLabelTask
+from labelflow.store import SqlStore, connect, create_schema
 
 STORE_KINDS = ("memory", "sqlite")
 

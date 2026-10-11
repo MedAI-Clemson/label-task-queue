@@ -8,8 +8,8 @@ from hypothesis import given
 from hypothesis import strategies as st
 from hypothesis.extra.numpy import arrays
 
-from ltq.labeltask import rle
-from ltq.labeltask.rle import RLEError
+from labelflow.labeltask import rle
+from labelflow.labeltask.rle import RLEError
 
 masks = arrays(dtype=bool, shape=st.tuples(st.integers(1, 12), st.integers(1, 12)))
 

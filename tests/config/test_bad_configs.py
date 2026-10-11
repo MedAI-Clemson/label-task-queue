@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from ltq.engine.config import validate_config
+from labelflow.engine.config import validate_config
 
 BAD_DIR = Path(__file__).parent / "bad"
 CASES = sorted(BAD_DIR.glob("*.yaml"))

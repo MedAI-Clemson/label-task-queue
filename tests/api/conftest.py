@@ -25,9 +25,9 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from httpx2 import Response
 
-from ltq.api import Settings, create_app
-from ltq.labeltask import LabelTaskRegistry
-from ltq.labeltask.standin import StandInLabelTask
+from labelflow.api import Settings, create_app
+from labelflow.labeltask import LabelTaskRegistry
+from labelflow.labeltask.standin import StandInLabelTask
 
 ROOT = Path(__file__).resolve().parents[2]
 PASSWORD = "correct horse battery"
@@ -105,7 +105,7 @@ class Caller:
 @pytest.fixture(scope="session")
 def template_db(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """A database made by ``alembic upgrade head``; each test works on a copy."""
-    path = tmp_path_factory.mktemp("template") / "ltq.db"
+    path = tmp_path_factory.mktemp("template") / "labelflow.db"
     config = Config(str(ROOT / "alembic.ini"))
     config.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
     config.attributes["configure_logger"] = False
@@ -128,7 +128,7 @@ def media(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def settings(tmp_path: Path, template_db: Path, media: Path) -> Settings:
-    database = tmp_path / "ltq.db"
+    database = tmp_path / "labelflow.db"
     shutil.copy(template_db, database)
     return Settings(
         database_uri=f"sqlite:///{database}",

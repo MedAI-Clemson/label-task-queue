@@ -2,7 +2,7 @@
 
 import pytest
 
-from ltq.engine import SCHEMA, InMemoryTables, IntegrityError
+from labelflow.engine import SCHEMA, InMemoryTables, IntegrityError
 
 
 def slot_row(slot, status="open", item="a"):

@@ -1,4 +1,4 @@
-"""``python -m ltq.api.admin create-admin``: the first administrator."""
+"""``python -m labelflow.api.admin create-admin``: the first administrator."""
 
 from __future__ import annotations
 
@@ -9,12 +9,15 @@ import sys
 import pytest
 from fastapi.testclient import TestClient
 
-from ltq.api import admin as cli
-from ltq.api import create_app
+from labelflow.api import admin as cli
+from labelflow.api import create_app
 
 
 def env_for(settings, **more):
-    return {"DATABASE_URI": settings.database_uri, "LTQ_ADMIN_PASSWORD": "a long password"} | more
+    return {
+        "DATABASE_URI": settings.database_uri,
+        "LABELFLOW_ADMIN_PASSWORD": "a long password",
+    } | more
 
 
 def login(settings, label_tasks, username, password):
@@ -58,14 +61,17 @@ def test_no_password_at_all_is_refused(settings, capsys):
         ["create-admin", "boss"], {"DATABASE_URI": settings.database_uri}, no_terminal
     )
     assert status == 1
-    assert "Set LTQ_ADMIN_PASSWORD" in capsys.readouterr().err
+    assert "Set LABELFLOW_ADMIN_PASSWORD" in capsys.readouterr().err
 
 
 def test_an_existing_account_is_not_replaced(settings, label_tasks, capsys):
     assert cli.main(["create-admin", "boss"], env_for(settings)) == 0
     capsys.readouterr()
     assert (
-        cli.main(["create-admin", "boss"], env_for(settings, LTQ_ADMIN_PASSWORD="another one")) == 1
+        cli.main(
+            ["create-admin", "boss"], env_for(settings, LABELFLOW_ADMIN_PASSWORD="another one")
+        )
+        == 1
     )
     assert capsys.readouterr().err == "Error: An account named 'boss' already exists.\n"
     assert login(settings, label_tasks, "boss", "a long password").status_code == 200
@@ -79,7 +85,7 @@ def test_an_existing_account_is_not_replaced(settings, label_tasks, capsys):
     ],
 )
 def test_a_bad_username_or_password_is_refused(settings, capsys, username, password, message):
-    env = env_for(settings, LTQ_ADMIN_PASSWORD=password)
+    env = env_for(settings, LABELFLOW_ADMIN_PASSWORD=password)
     assert cli.main(["create-admin", username], env) == 1
     assert message in capsys.readouterr().err
 
@@ -87,16 +93,16 @@ def test_a_bad_username_or_password_is_refused(settings, capsys, username, passw
 def test_the_database_must_be_set_up_first(tmp_path, capsys):
     env = {
         "DATABASE_URI": f"sqlite:///{tmp_path / 'new.db'}",
-        "LTQ_ADMIN_PASSWORD": "a long password",
+        "LABELFLOW_ADMIN_PASSWORD": "a long password",
     }
     assert cli.main(["create-admin", "boss"], env) == 1
     assert "alembic upgrade head" in capsys.readouterr().err
 
 
 def test_a_bad_setting_is_reported(settings, capsys):
-    env = env_for(settings, LTQ_SESSION_HOURS="soon")
+    env = env_for(settings, LABELFLOW_SESSION_HOURS="soon")
     assert cli.main(["create-admin", "boss"], env) == 1
-    assert "LTQ_SESSION_HOURS" in capsys.readouterr().err
+    assert "LABELFLOW_SESSION_HOURS" in capsys.readouterr().err
 
 
 def test_a_command_is_needed(capsys):
@@ -108,7 +114,7 @@ def test_a_command_is_needed(capsys):
 
 def test_it_runs_as_a_module(settings, label_tasks):
     run = subprocess.run(
-        [sys.executable, "-m", "ltq.api.admin", "create-admin", "boss"],
+        [sys.executable, "-m", "labelflow.api.admin", "create-admin", "boss"],
         env=os.environ | env_for(settings),
         capture_output=True,
         text=True,

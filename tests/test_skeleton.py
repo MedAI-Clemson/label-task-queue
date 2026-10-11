@@ -1,7 +1,7 @@
 from fastapi.testclient import TestClient
 
-from ltq.api import app
-from ltq.engine.config import WorkflowConfig
+from labelflow.api import app
+from labelflow.engine.config import WorkflowConfig
 
 
 def test_health():

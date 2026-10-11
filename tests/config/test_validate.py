@@ -2,7 +2,7 @@
 
 import pytest
 
-from ltq.engine.config import (
+from labelflow.engine.config import (
     ConfigReport,
     Problem,
     ValidationContext,

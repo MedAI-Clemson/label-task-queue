@@ -56,7 +56,7 @@ pip install -e ".[dev]"
 
 ```bash
 ./run.sh                                          # migrate the database, then serve on :8000
-python -m ltq.api.admin create-admin <username>   # once, to make the first administrator
+python -m labelflow.api.admin create-admin <username>   # once, to make the first administrator
 ```
 
 `run.sh` runs `alembic upgrade head` before starting uvicorn. The API docs are at
@@ -65,18 +65,18 @@ python -m ltq.api.admin create-admin <username>   # once, to make the first admi
 ```bash
 docker compose up --build
 docker compose run --rm app sh -c \
-  "alembic upgrade head && python -m ltq.api.admin create-admin <username>"
+  "alembic upgrade head && python -m labelflow.api.admin create-admin <username>"
 ```
 
 Settings are environment variables:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `DATABASE_URI` | `sqlite:///./db/ltq.db` | The SQLite database. |
-| `LTQ_LABEL_TASKS` | `./ontologies` (`run.sh`: `examples/ontologies`) | Folder of ontology files. |
-| `LTQ_MEDIA_ROOT` | not set | Folder the server may read images from, to hash them at import. |
-| `LTQ_SESSION_HOURS` | `12` | How long a login lasts. |
-| `LTQ_COOKIE_SECURE` | `false` | Set to `true` when the service is served over https. |
+| `DATABASE_URI` | `sqlite:///./db/labelflow.db` | The SQLite database. |
+| `LABELFLOW_LABEL_TASKS` | `./ontologies` (`run.sh`: `examples/ontologies`) | Folder of ontology files. |
+| `LABELFLOW_MEDIA_ROOT` | not set | Folder the server may read images from, to hash them at import. |
+| `LABELFLOW_SESSION_HOURS` | `12` | How long a login lasts. |
+| `LABELFLOW_COOKIE_SECURE` | `false` | Set to `true` when the service is served over https. |
 
 A typical session over the API:
 
@@ -92,17 +92,17 @@ A typical session over the API:
 
 | Package | What it holds |
 | --- | --- |
-| `src/ltq/engine` | The labeling workflow: config and validation, stages, slots and claims, the event log, explain, edits to a running workflow. Plain Python, with no web or database code. |
-| `src/ltq/labeltask` | Label tasks: the built-in ontology label task, COCO RLE masks, and the consensus check. |
-| `src/ltq/store` | SQLite storage for the engine (SQLAlchemy 2), Alembic migrations, and the rebuild command. |
-| `src/ltq/api` | The web API (FastAPI): accounts and login, projects, workflows, labeler and admin endpoints, exports. |
-| `src/ltq/ui` | The annotation interface (not built yet). |
+| `src/labelflow/engine` | The labeling workflow: config and validation, stages, slots and claims, the event log, explain, edits to a running workflow. Plain Python, with no web or database code. |
+| `src/labelflow/labeltask` | Label tasks: the built-in ontology label task, COCO RLE masks, and the consensus check. |
+| `src/labelflow/store` | SQLite storage for the engine (SQLAlchemy 2), Alembic migrations, and the rebuild command. |
+| `src/labelflow/api` | The web API (FastAPI): accounts and login, projects, workflows, labeler and admin endpoints, exports. |
+| `src/labelflow/ui` | The annotation interface (not built yet). |
 
 Useful commands:
 
 ```bash
-python -m ltq.engine.config.schema > schema/workflow-config.schema.json   # regenerate the schema
-python -m ltq.store.rebuild "$DATABASE_URI" --project <name> --verify-only  # check tables against the log
+python -m labelflow.engine.config.schema > schema/workflow-config.schema.json   # regenerate the schema
+python -m labelflow.store.rebuild "$DATABASE_URI" --project <name> --verify-only  # check tables against the log
 ```
 
 ## Test

@@ -11,8 +11,8 @@ import sqlalchemy as sa
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from ltq.engine import SCHEMA, InMemoryTables, IntegrityError, Table
-from ltq.store import SqlStore, create_schema
+from labelflow.engine import SCHEMA, InMemoryTables, IntegrityError, Table
+from labelflow.store import SqlStore, create_schema
 
 # One column of every type, each with and without None.
 THINGS = Table(

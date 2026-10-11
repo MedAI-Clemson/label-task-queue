@@ -2,7 +2,7 @@
 
 import pytest
 
-from ltq.engine import (
+from labelflow.engine import (
     AlreadyExists,
     Engine,
     InvalidRequest,
@@ -12,8 +12,8 @@ from ltq.engine import (
     UnknownRole,
     UnknownWorkflow,
 )
-from ltq.labeltask import LabelTaskRegistry
-from ltq.labeltask.standin import StandInLabelTask
+from labelflow.labeltask import LabelTaskRegistry
+from labelflow.labeltask.standin import StandInLabelTask
 
 ONE_STAGE = {"name": "annotate", "assign_to": "annotator"}
 

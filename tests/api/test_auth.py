@@ -9,8 +9,8 @@ import pytest
 import sqlalchemy as sa
 from fastapi.testclient import TestClient
 
-from ltq.api import create_app, identity
-from ltq.store import connect
+from labelflow.api import create_app, identity
+from labelflow.store import connect
 
 NOT_LOGGED_IN = "You are not logged in. Log in with POST /auth/login."
 
@@ -28,7 +28,7 @@ def test_login_gives_a_token_and_a_cookie(client, admin, expect):
     assert body["user"] == {"user_id": "root", "display_name": "Root", "is_admin": True}
     assert body["expires_at"].startswith("2026-10-10T10:00:00")  # one hour after the test clock
     cookie = response.headers["set-cookie"]
-    assert f"ltq_session={body['token']}" in cookie
+    assert f"labelflow_session={body['token']}" in cookie
     assert "HttpOnly" in cookie
     assert "SameSite=lax" in cookie
     assert "Path=/" in cookie
@@ -131,7 +131,7 @@ def test_logging_out_ends_the_login(app, admin, settings):
         token = login(browser, "root", "correct horse battery").json()["token"]
         response = browser.post("/auth/logout")
         assert response.status_code == 204
-        assert "ltq_session=" in response.headers["set-cookie"]
+        assert "labelflow_session=" in response.headers["set-cookie"]
         assert "Max-Age=0" in response.headers["set-cookie"]
         assert browser.get("/auth/me").status_code == 401
         assert (

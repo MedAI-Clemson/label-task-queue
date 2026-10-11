@@ -12,8 +12,8 @@ from pathlib import Path
 import pyarrow.parquet as pq
 from fastapi.testclient import TestClient
 
-from ltq.api import create_app
-from ltq.engine import draw
+from labelflow.api import create_app
+from labelflow.engine import draw
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -148,7 +148,7 @@ stages:
 
 
 def test_a_project_with_an_ontology_folder(settings, tmp_path):
-    """The same flow with the real ontology task, loaded from LTQ_LABEL_TASKS."""
+    """The same flow with the real ontology task, loaded from LABELFLOW_LABEL_TASKS."""
     password = "correct horse battery"
     ontologies = tmp_path / "ontologies"
     ontologies.mkdir()

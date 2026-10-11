@@ -2,7 +2,7 @@
 
 import pytest
 
-from ltq.engine import UnknownItem
+from labelflow.engine import UnknownItem
 
 ANNOTATE = {"name": "annotate", "assign_to": "annotator"}
 REVIEW = {"name": "review", "input": "annotate", "assign_to": "expert"}

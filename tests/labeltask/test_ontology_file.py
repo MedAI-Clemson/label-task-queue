@@ -8,7 +8,7 @@ import textwrap
 import pytest
 import yaml
 
-from ltq.labeltask import (
+from labelflow.labeltask import (
     LabelTask,
     LabelTaskRegistry,
     OntologyError,

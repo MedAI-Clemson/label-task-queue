@@ -4,12 +4,12 @@ FROM python:3.12-slim
 # the defaults below let the container start on its own with the example ontologies.
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    DATABASE_URI=sqlite:////db/ltq.db \
-    LTQ_LABEL_TASKS=/ontologies
+    DATABASE_URI=sqlite:////db/labelflow.db \
+    LABELFLOW_LABEL_TASKS=/ontologies
 
 WORKDIR /code
 
-# alembic.ini and the migrations (src/ltq/store/migrations) stay in /code, where `alembic`
+# alembic.ini and the migrations (src/labelflow/store/migrations) stay in /code, where `alembic`
 # looks for them; the package itself is installed from src/.
 COPY pyproject.toml README.md alembic.ini ./
 COPY src ./src
@@ -22,5 +22,5 @@ EXPOSE 8000
 
 # Bring the database up to date, then serve. To make the first administrator:
 #   docker compose run --rm app sh -c \
-#     "alembic upgrade head && python -m ltq.api.admin create-admin <username>"
-CMD ["sh", "-c", "alembic upgrade head && exec uvicorn ltq.api:app --host 0.0.0.0 --port 8000"]
+#     "alembic upgrade head && python -m labelflow.api.admin create-admin <username>"
+CMD ["sh", "-c", "alembic upgrade head && exec uvicorn labelflow.api:app --host 0.0.0.0 --port 8000"]

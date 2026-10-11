@@ -7,7 +7,7 @@ hand in the walk's docstring.
 
 import pytest
 
-from ltq.engine import (
+from labelflow.engine import (
     EditRefused,
     InvalidRequest,
     InvalidShown,

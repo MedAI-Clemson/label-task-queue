@@ -4,7 +4,7 @@ import itertools
 
 import pytest
 
-from ltq.engine import (
+from labelflow.engine import (
     BrokenChain,
     event_from_json,
     event_hash,
@@ -12,7 +12,7 @@ from ltq.engine import (
     rebuild,
     verify_chain,
 )
-from ltq.engine import events as ev
+from labelflow.engine import events as ev
 
 
 @pytest.fixture

@@ -3,7 +3,7 @@ requires = ["hatchling==1.32.4"]
 build-backend = "hatchling.build"
 
 [project]
-name = "ltq"
+name = "labelflow"
 version = "0.1.0.dev0"
 description = "label-task-queue: auditable labeling workflows for research data"
 readme = "README.md"
@@ -30,7 +30,7 @@ dev = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/ltq"]
+packages = ["src/labelflow"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

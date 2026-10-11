@@ -2,7 +2,7 @@
 
 import json
 
-from ltq.engine import draw
+from labelflow.engine import draw
 
 DOUBLE = {"name": "annotate", "assign_to": "annotator", "labels_per_item": 2}
 ADJUDICATE = {"name": "adjudicate", "input": "annotate.disagreed", "assign_to": "expert"}

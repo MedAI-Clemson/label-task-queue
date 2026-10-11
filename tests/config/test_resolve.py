@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from ltq.engine.config import WorkflowConfig, resolve, resolved_yaml, validate_config
+from labelflow.engine.config import WorkflowConfig, resolve, resolved_yaml, validate_config
 
 TESTS_DIR = Path(__file__).parent / "resolved"
 EXAMPLES_DIR = Path(__file__).resolve().parents[2] / "examples" / "workflows"

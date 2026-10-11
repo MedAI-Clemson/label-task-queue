@@ -5,7 +5,7 @@ import copy
 import numpy as np
 import pytest
 
-from ltq.labeltask import LabelValidationError, load_ontology, rle
+from labelflow.labeltask import LabelValidationError, load_ontology, rle
 
 EMPTY_MASK_HINT = (
     "Every mask class must be present; for an empty mask, give an RLE with no foreground, "

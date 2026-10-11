@@ -11,10 +11,10 @@ from typing import Any
 import pytest
 import sqlalchemy as sa
 
-from ltq.engine import Engine, Store
-from ltq.labeltask import LabelTaskRegistry
-from ltq.labeltask.standin import StandInLabelTask
-from ltq.store import SqlStore, connect, create_schema
+from labelflow.engine import Engine, Store
+from labelflow.labeltask import LabelTaskRegistry
+from labelflow.labeltask.standin import StandInLabelTask
+from labelflow.store import SqlStore, connect, create_schema
 
 
 class FakeClock:
@@ -30,7 +30,7 @@ class FakeClock:
 
 @pytest.fixture
 def url(tmp_path: Path) -> str:
-    return f"sqlite:///{tmp_path / 'ltq.db'}"
+    return f"sqlite:///{tmp_path / 'labelflow.db'}"
 
 
 @pytest.fixture

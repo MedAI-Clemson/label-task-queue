@@ -18,10 +18,10 @@ logged. Afterwards:
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from ltq.engine import EditRefused, Engine, EngineError, rebuild, verify_chain
-from ltq.engine.queries import config_at
-from ltq.labeltask import LabelTaskRegistry
-from ltq.labeltask.standin import StandInLabelTask
+from labelflow.engine import EditRefused, Engine, EngineError, rebuild, verify_chain
+from labelflow.engine.queries import config_at
+from labelflow.labeltask import LabelTaskRegistry
+from labelflow.labeltask.standin import StandInLabelTask
 
 USERS = ("u1", "u2", "u3", "u4", "u5")
 GRANTS = {

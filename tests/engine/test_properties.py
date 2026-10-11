@@ -18,7 +18,7 @@ from collections import Counter
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from ltq.engine import (
+from labelflow.engine import (
     BrokenChain,
     Engine,
     EngineError,
@@ -26,10 +26,10 @@ from ltq.engine import (
     rebuild,
     verify_chain,
 )
-from ltq.engine.config import WorkflowConfig
-from ltq.engine.queries import live_slots
-from ltq.labeltask import LabelTaskRegistry
-from ltq.labeltask.standin import StandInLabelTask
+from labelflow.engine.config import WorkflowConfig
+from labelflow.engine.queries import live_slots
+from labelflow.labeltask import LabelTaskRegistry
+from labelflow.labeltask.standin import StandInLabelTask
 
 USERS = ("u1", "u2", "u3", "u4", "u5")
 ROLES = ("annotator", "expert", "trainee")

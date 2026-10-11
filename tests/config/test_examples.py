@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from ltq.engine.config import ValidationContext, validate_config
+from labelflow.engine.config import ValidationContext, validate_config
 
 EXAMPLES_DIR = Path(__file__).resolve().parents[2] / "examples" / "workflows"
 EXAMPLE_FILES = sorted(EXAMPLES_DIR.glob("*.yaml"))

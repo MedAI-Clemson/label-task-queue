@@ -2,8 +2,8 @@
 
 import pytest
 
-from ltq.labeltask import LabelTaskRegistry, LabelValidationError
-from ltq.labeltask.standin import StandInLabelTask
+from labelflow.labeltask import LabelTaskRegistry, LabelValidationError
+from labelflow.labeltask.standin import StandInLabelTask
 
 
 def test_validate():

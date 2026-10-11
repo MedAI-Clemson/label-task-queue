@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from ltq.engine import InMemoryStore, event_from_json, event_to_json, rebuild, verify_chain
-from ltq.store import SqlStore
+from labelflow.engine import InMemoryStore, event_from_json, event_to_json, rebuild, verify_chain
+from labelflow.store import SqlStore
 
 
 def test_the_tables_and_the_log_are_identical_after_the_same_commands(build_engine, script, store):

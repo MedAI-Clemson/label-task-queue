@@ -10,7 +10,7 @@ from hypothesis import given
 from hypothesis import strategies as st
 from hypothesis.extra.numpy import arrays
 
-from ltq.labeltask import ConsensusResult, LabelValidationError, load_ontology, rle
+from labelflow.labeltask import ConsensusResult, LabelValidationError, load_ontology, rle
 
 # Lung masks agree at an IoU of 0.8 or more, effusion masks at 0.5 or more.
 LUNG_THRESHOLD = 0.8

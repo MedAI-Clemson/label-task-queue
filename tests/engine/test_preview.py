@@ -5,7 +5,7 @@ checks how they are defined at the edges: items with one slot never reach ``.agr
 new stage without input reaches only items imported later, and every item is counted once.
 """
 
-from ltq.engine import draw
+from labelflow.engine import draw
 
 ANNOTATE = {"name": "annotate", "assign_to": "annotator"}
 REVIEW = {"name": "expert_review", "input": "annotate", "assign_to": "expert", "sample": 0.2}

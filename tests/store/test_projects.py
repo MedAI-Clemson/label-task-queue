@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from ltq.engine import InMemoryStore, verify_chain
-from ltq.store import SqlStore, projects
+from labelflow.engine import InMemoryStore, verify_chain
+from labelflow.store import SqlStore, projects
 
 
 def test_two_projects_stay_separate(make_sql_engine, script, engine):

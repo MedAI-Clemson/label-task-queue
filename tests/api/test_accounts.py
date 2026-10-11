@@ -7,8 +7,8 @@ import hmac
 import pytest
 import sqlalchemy as sa
 
-from ltq.api import passwords
-from ltq.store import connect
+from labelflow.api import passwords
+from labelflow.store import connect
 
 
 def test_an_admin_creates_an_account(admin, client, expect):

@@ -15,7 +15,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 from pydantic import ValidationError
 
-from ltq.engine.config import (
+from labelflow.engine.config import (
     WorkflowConfig,
     config_json_schema,
     resolve,

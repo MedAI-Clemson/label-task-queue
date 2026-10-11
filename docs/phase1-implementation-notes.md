@@ -13,12 +13,12 @@ one is usually a small, local change.
 | --- | --- | --- | --- |
 | 0 | Scaffold | Done, except the `v0-prototype` tag (see below) | `pyproject.toml`, `.github/workflows/ci.yml` |
 | 0b | Interface spike | Not started: needs a person to try the drawing libraries | |
-| 1 | Config | Done | `src/ltq/engine/config/`, `schema/`, `examples/workflows/` |
-| 2 | Engine core | Done | `src/ltq/engine/` |
-| 3 | Built-in label task | Done | `src/ltq/labeltask/`, `examples/ontologies/` |
-| 4 | Storage | Done (SQLite only) | `src/ltq/store/`, `alembic.ini` |
-| 5 | Versioning and edits | Done | `src/ltq/engine/edits.py` |
-| 6 | API | Done (Docker image not built in CI) | `src/ltq/api/` |
+| 1 | Config | Done | `src/labelflow/engine/config/`, `schema/`, `examples/workflows/` |
+| 2 | Engine core | Done | `src/labelflow/engine/` |
+| 3 | Built-in label task | Done | `src/labelflow/labeltask/`, `examples/ontologies/` |
+| 4 | Storage | Done (SQLite only) | `src/labelflow/store/`, `alembic.ini` |
+| 5 | Versioning and edits | Done | `src/labelflow/engine/edits.py` |
+| 6 | API | Done (Docker image not built in CI) | `src/labelflow/api/` |
 | 7 | Interface | Not started: waits on 0b | |
 | 8 | Pilot | Not started | |
 
@@ -28,7 +28,7 @@ on `main` is `e77c9d0`. To tag it, run
 
 ## How the pieces fit
 
-- `ltq.engine` is plain Python. Every change is an event appended to the log. A pure
+- `labelflow.engine` is plain Python. Every change is an event appended to the log. A pure
   reducer applies each event to a small set of **derived tables** (slots, labels, final
   labels, and so on), in the same transaction. The reducer never calls a label task or a
   clock: draws, consensus answers, ids and timestamps are all inside the events. Replaying
@@ -36,7 +36,7 @@ on `main` is `e77c9d0`. To tag it, run
   stores.
 - The engine reaches its tables through four operations (get, insert, update, select by
   equality). `InMemoryStore` and the SQLite `SqlStore` both implement them, and the
-  SQLite tables are generated from the same declaration (`ltq.engine.tables.SCHEMA`).
+  SQLite tables are generated from the same declaration (`labelflow.engine.tables.SCHEMA`).
   Every engine test runs on both stores.
 - Each event stores the hash of the one before it (`verify_chain`). SQLite triggers refuse
   any update or deletion of an event, and any event out of chain order.
@@ -146,7 +146,7 @@ on `main` is `e77c9d0`. To tag it, run
     interface). Deactivating an account or resetting its password ends its logins.
     Passwords are hashed with the standard library's scrypt.
 30. **Hashing at import:** if an item comes without a content hash, the server hashes the
-    file. It does this only for a `file://` path inside `LTQ_MEDIA_ROOT`, or for any
+    file. It does this only for a `file://` path inside `LABELFLOW_MEDIA_ROOT`, or for any
     `file://` path when that setting is unset. Otherwise it asks for the hash. A batch
     import is all or nothing.
 31. **A held claim survives a role change.** A person whose role is revoked can still submit
@@ -171,4 +171,4 @@ on `main` is `e77c9d0`. To tag it, run
   interface will let them pick.
 - **Agreed label for masks:** a copy of the earliest label, as decided. There is no merge.
 - **Mask tool (brush or polygon):** open, pending the interface spike.
-- **Names:** the package is called `ltq` as a placeholder; `show_prior` is used as proposed.
+- **Names:** the package is called `labelflow` as a placeholder; `show_prior` is used as proposed.

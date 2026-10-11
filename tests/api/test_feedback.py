@@ -8,7 +8,7 @@ import io
 import pyarrow.parquet as pq
 import pytest
 
-from ltq.api import tabular
+from labelflow.api import tabular
 
 GOLD_ROUND = {
     "workflow": "gold_round",

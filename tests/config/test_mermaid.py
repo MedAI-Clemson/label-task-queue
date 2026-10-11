@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from ltq.engine.config import WorkflowConfig, to_mermaid, validate_config
-from ltq.engine.config.diagram import escape, ordinal
+from labelflow.engine.config import WorkflowConfig, to_mermaid, validate_config
+from labelflow.engine.config.diagram import escape, ordinal
 
 TESTS_DIR = Path(__file__).parent / "mermaid"
 EXAMPLES_DIR = Path(__file__).resolve().parents[2] / "examples" / "workflows"

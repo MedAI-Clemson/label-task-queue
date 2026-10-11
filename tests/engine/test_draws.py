@@ -5,7 +5,7 @@ import hashlib
 from hypothesis import given
 from hypothesis import strategies as st
 
-from ltq.engine import draw
+from labelflow.engine import draw
 
 names = st.text(min_size=1, max_size=12)
 seeds = st.integers(min_value=-(2**63), max_value=2**63)

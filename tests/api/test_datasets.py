@@ -8,8 +8,8 @@ from dataclasses import replace
 import pytest
 from fastapi.testclient import TestClient
 
-from ltq.api import create_app
-from ltq.engine import Engine
+from labelflow.api import create_app
+from labelflow.engine import Engine
 
 
 def test_creating_and_listing_datasets(admin, project, expect):

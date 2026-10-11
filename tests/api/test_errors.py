@@ -7,9 +7,9 @@ import inspect
 import pytest
 from fastapi.testclient import TestClient
 
-from ltq.api.errors import ApiError, Forbidden, NotLoggedIn, Unprocessable, status_for
-from ltq.engine import errors as engine_errors
-from ltq.labeltask import UnknownLabelTask
+from labelflow.api.errors import ApiError, Forbidden, NotLoggedIn, Unprocessable, status_for
+from labelflow.engine import errors as engine_errors
+from labelflow.labeltask import UnknownLabelTask
 
 EXPECTED = {
     "UnknownRole": 404,
@@ -113,7 +113,7 @@ def test_a_label_task_the_server_lacks_is_a_server_problem(raising):
 
 
 def test_an_unexpected_error_says_little(raising):
-    response = raising(RuntimeError("secret: /srv/db/ltq.db"))
+    response = raising(RuntimeError("secret: /srv/db/labelflow.db"))
     assert response.status_code == 500
     assert response.json() == {
         "detail": "Something went wrong on the server. The details are in the server log.",

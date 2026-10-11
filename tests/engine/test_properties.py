@@ -3,7 +3,8 @@
 Each example starts a small project with one or two workflows (chosen from the configs
 below, which cover labels_per_item 2/3/all/fraction, sample < 1, agreed and disagreed
 branches, score_against and final: none), then runs a random list of commands: role grants
-and revokes, imports, requests for work, explicit claims, submits (valid and invalid),
+and revokes, imports, requests for work, explicit claims, submits (valid and invalid, some
+starting from an earlier label shown),
 releases, cancels, exclusions (also of finalized items), and pauses and resumes of stages and
 whole workflows. Each request for work is checked against the eligibility rules: it hands out
 nothing only when nothing is claimable, and a slot the person released only when nothing
@@ -237,6 +238,10 @@ def run(engine: Engine, workflows: list[str], op: tuple) -> None:
                     assert len(engine.store.events()) == before
                     return
                 raise AssertionError("an invalid label was accepted")
+            if shown.prior_label_ids and b % 2:
+                # Sometimes start from one of the earlier labels shown.
+                start = shown.prior_label_ids[b % len(shown.prior_label_ids)]
+                shown = shown.model_copy(update={"started_from": start})
             engine.submit(workflow, claim["slot"], user, {"value": value}, shown, b * 100)
         elif kind == "release":
             claim = my_claim(engine, workflow, user) or engine.request_work(workflow, user)
@@ -343,6 +348,9 @@ def check_invariants(engine: Engine, workflows: list[str]) -> None:
             assert slot["claimed_roles"] is None
     for label in store.select("labels"):
         assert label["roles_at_claim"] == claim_roles[label["slot"]]
+        # A label starts, if at all, from one of the earlier labels it was shown.
+        start = label["started_from"]
+        assert start is None or start in label["shown_prior_ids"]
 
 
 @settings(

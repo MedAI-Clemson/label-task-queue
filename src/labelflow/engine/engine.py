@@ -764,7 +764,7 @@ class Engine:
 
     def export_labels(self, workflow: str) -> list[dict[str, Any]]:
         with self.store.reading():
-            return export_labels(self.store, workflow)
+            return export_labels(self.store, workflow, self.label_tasks)
 
     def score_report(self, workflow: str) -> list[dict[str, Any]]:
         with self.store.reading():

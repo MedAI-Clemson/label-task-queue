@@ -6,8 +6,9 @@ label, a list of label ids, a list of roles) are given as canonical JSON text.
 - ``export_items``: one row per item, with its final label and how it was decided.
 - ``export_labels``: one row per label, with who made it, the roles they held then
   (``roles_at_claim``: at the claim, which is what eligibility was checked against; ``roles``:
-  at the submit), the stage, the config version, what they were shown and the score against
-  a key where set.
+  at the submit), the stage, the config version, what they were shown, the earlier label
+  they started from (``started_from``) and how far they moved from it
+  (``changed_from_start``), and the score against a key where set.
 - ``score_report``: per stage and labeler, how many labels agreed with the key.
 - ``sampling_report``: per stage, how many items arrived and how many were admitted, also
   per upstream labeler, so the actual sampling rates can be checked.
@@ -26,6 +27,7 @@ from collections import defaultdict
 from typing import Any
 
 from labelflow.engine.events import canonical_json
+from labelflow.engine.flow import ask_task
 from labelflow.engine.queries import (
     active_config,
     export_status,
@@ -33,7 +35,8 @@ from labelflow.engine.queries import (
     stages_ever,
     workflow_row,
 )
-from labelflow.engine.tables import Tables
+from labelflow.engine.tables import Row, Tables
+from labelflow.labeltask import LabelTaskRegistry, UnknownLabelTask
 
 ExportRow = dict[str, Any]
 
@@ -78,12 +81,24 @@ def export_items(tables: Tables, workflow: str) -> list[ExportRow]:
     return rows
 
 
-def export_labels(tables: Tables, workflow: str) -> list[ExportRow]:
+def export_labels(
+    tables: Tables, workflow: str, label_tasks: LabelTaskRegistry | None = None
+) -> list[ExportRow]:
     """One row per label, in submission order.
 
     ``roles_at_claim`` lists the roles the labeler held when they claimed the slot: the
     roles that made them eligible. ``roles`` lists the roles held at the submit; a role
     revoked in between is missing there (a held claim survives a role change).
+
+    ``started_from`` is the earlier label the labeler copied into the editor to start from
+    ("Start from this layer"), or None. For such a label, ``changed_from_start`` compares
+    the submitted label with that one using the label task's consensus check, computed now
+    from the two stored labels (never stored): ``agreed`` (true when the submitted label
+    would agree with its start under the rule), the ``rule_version``, and the check's
+    per-field ``detail`` (for masks, the IoU per class; for classifications, both values).
+    It shows whether reviewers edit what they start from or accept it as it is. It is None
+    when the label started from nothing, or when ``label_tasks`` (the engine's registry) is
+    not given or lacks the label's task.
     """
     workflow_row(tables, workflow)
     rows = []
@@ -109,6 +124,8 @@ def export_labels(tables: Tables, workflow: str) -> list[ExportRow]:
                 "shown_prior_ids": _json(label["shown_prior_ids"]),
                 "show_prior": label["show_prior"],
                 "shown_consensus_rule": label["shown_consensus_rule"],
+                "started_from": label["started_from"],
+                "changed_from_start": _json(_changed_from_start(tables, label, label_tasks)),
                 "score_against": score.get("key_property"),
                 "score_key_status": score.get("key_status"),
                 "score_agreed": score.get("agreed"),
@@ -117,6 +134,25 @@ def export_labels(tables: Tables, workflow: str) -> list[ExportRow]:
             }
         )
     return rows
+
+
+def _changed_from_start(
+    tables: Tables, label: Row, label_tasks: LabelTaskRegistry | None
+) -> dict[str, Any] | None:
+    """The label task's consensus check of the label against the label it started from."""
+    if label["started_from"] is None or label_tasks is None:
+        return None
+    start = tables.get("labels", label=label["started_from"])
+    try:
+        task = label_tasks.get(label["label_task"])
+    except UnknownLabelTask:
+        return None
+    result = ask_task(
+        task,
+        f"comparing label {label['label']} with label {start['label']}, which it started from",
+        lambda: task.check_consensus([start["value"], label["value"]]),
+    )
+    return {"agreed": result.agreed, "rule_version": result.rule_version, "detail": result.detail}
 
 
 def _stage_order(tables: Tables, workflow: str) -> dict[str, int]:

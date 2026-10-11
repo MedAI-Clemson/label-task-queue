@@ -55,6 +55,7 @@ def label_row(label: int, slot: int, user: str) -> dict:
         "shown_prior_ids": [],
         "show_prior": True,
         "shown_consensus_rule": None,
+        "started_from": None,
         "label_task": "standin@1",
         "ontology_version": "o@1",
         "duration_ms": None,

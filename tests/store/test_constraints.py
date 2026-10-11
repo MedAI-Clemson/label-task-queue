@@ -49,6 +49,7 @@ def label_row(label: int, slot: int, **changes) -> dict:
         "shown_prior_ids": [],
         "show_prior": False,
         "shown_consensus_rule": None,
+        "started_from": None,
         "label_task": "standin@1",
         "ontology_version": "o@1",
         "duration_ms": None,

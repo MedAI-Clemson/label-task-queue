@@ -185,7 +185,8 @@ SCHEMA: tuple[Table, ...] = (
     ),
     # roles: the roles the labeler held when submitting. roles_at_claim: the roles they held
     # when they claimed the slot (the ones eligibility was checked against; a role revoked
-    # between the claim and the submit shows up only here).
+    # between the claim and the submit shows up only here). started_from: the earlier label the
+    # labeler copied into the editor to start from, if any (one of shown_prior_ids).
     Table(
         "labels",
         key=("label",),
@@ -204,6 +205,7 @@ SCHEMA: tuple[Table, ...] = (
             "shown_prior_ids": "json",
             "show_prior": "bool",
             "shown_consensus_rule": "str?",
+            "started_from": "int?",
             "label_task": "str",
             "ontology_version": "str",
             "duration_ms": "int?",

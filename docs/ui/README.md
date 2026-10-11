@@ -10,7 +10,7 @@ API app (`/` redirects there). They share the API's accounts, login cookie and e
 | everyone | `/ui/login`, `/ui/logout` | Form login setting the same `HttpOnly`, `SameSite=lax` cookie the API uses |
 | labeler | `/ui/` | The projects you hold a role in, each workflow with the open slots you could claim now (you pick the workflow) |
 | labeler | `/ui/projects/{p}/workflows/{w}` | The workflow's stages and pauses, and "Get work" (claims the next slot) |
-| labeler | `.../slots/{slot}` | The labeling page: image, brush and polygon mask tools per class, erase, undo/redo, zoom/pan, classifications, earlier labels as toggleable layers with agree/disagree flags (none in a blind stage), submit, release with a reason |
+| labeler | `.../slots/{slot}` | The labeling page: image, brush and polygon mask tools per class, erase, undo/redo, zoom/pan, classifications, earlier labels as toggleable layers with agree/disagree flags and a "Start from this layer" button that copies one into the editor (none in a blind stage), "Clear all", submit, release with a reason |
 | labeler | `.../slots/{slot}/image` | Serves a `file://` image or a path inside `LABELFLOW_MEDIA_ROOT`, only to the holder of the slot |
 | admin | `/ui/admin/accounts` | Create, deactivate, reset password |
 | admin | `/ui/admin/projects`, `/ui/admin/projects/{p}` | Create projects; define roles, grant and revoke (with staffing warnings); create datasets |
@@ -22,7 +22,9 @@ API app (`/` redirects there). They share the API's accounts, login cookie and e
 Submitting a label is a JSON post from the page to the API's own
 `POST /projects/{p}/workflows/{w}/slots/{slot}/submit` with `label`, `shown` and
 `duration_ms`. `shown` is the work packet's `shown` exactly as the server gave it: the page
-offers every earlier label of the packet as a layer, and a blind stage has none.
+offers every earlier label of the packet as a layer, and a blind stage has none. When the
+reviewer used "Start from this layer", `shown.started_from` names that label; "Clear all"
+keeps it, and undoing the start removes it.
 
 Forms carry a token (an HMAC of the login cookie) checked on every post; the cookie is
 `SameSite=lax`, so a cross-site post carries neither.
@@ -44,7 +46,9 @@ jsdelivr; without outbound access the diagram's source is shown as text instead.
 
 `test_browser.py` runs the review example end to end in headless Chromium (an admin sets
 up accounts, roles, dataset, items and the workflow through the pages; an annotator draws
-with the brush and the polygon, classifies and submits; the expert reviews with layers),
-then checks the event log: each label's `shown` equals what the page displayed, and the
-masks decode to exactly the drawn pixels. It is skipped when Playwright is not installed.
+with the brush and the polygon, classifies and submits; the expert starts from the
+annotator's layer, edits one structure and submits), then checks the event log: each
+label's `shown` equals what the page displayed (including `started_from`), the masks decode
+to exactly the drawn pixels, and the expert's label equals the annotator's except the
+edited structure. It is skipped when Playwright is not installed.
 The screenshots here come from that run.

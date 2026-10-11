@@ -152,10 +152,14 @@ Everyone logs in at `http://<server>/ui/`, picks a workflow and presses "Get wor
   is also read by a second annotator. Neither sees the other's label.
 - **Experts**, in `jsrt_main`, have two kinds of work:
   - Adjudication: the two reads are shown as layers, with per-structure flags. The expert
-    submits a complete label.
-  - Blind review: the expert labels the image without seeing the annotation.
-
-  The interface cannot start from an earlier layer, so every expert label is drawn in full.
+    submits a complete label. To avoid redrawing all five structures, the expert may click
+    **Start from this layer** on one read. This copies its masks and its "nodule" answer
+    into the editor, replacing anything drawn (Undo brings it back). The expert then
+    corrects the disputed structures and submits. The label records which read it started
+    from, even if the expert later uses "Clear all". `labels.csv` shows it in `started_from`
+    and shows how much was changed in `changed_from_start`.
+  - Blind review: the expert labels the image without seeing the annotation, so there is
+    no layer to start from and every structure is drawn in full.
 
 ## 6. Export at the end
 
@@ -183,7 +187,7 @@ python -m labelflow.store.rebuild "$DATABASE_URI" --project jsrt_pilot --verify-
 | --- | --- |
 | For any final label: which labels produced it, who made them, their roles then, the stage, the config version, the rule | `items.csv` gives `final_label`, `source_stage`, `label_ids`, `rule` and `config_version`. Join `label_ids` to `labels.csv` for `labeler`, `roles_at_claim`, `roles`, `stage` and `config_version`. The same trail is in `explain/<item>.txt`. |
 | For any sampling decision: the draw, the threshold, the version | The `admission_decided` events in `events.jsonl` have the draw and the threshold, under the config version. `explain/<item>.txt` prints them on the admission lines. `sampling.json` gives the rates actually drawn, overall and per annotator. Anyone can recompute a draw from the seed: `labelflow.engine.draw(seed, stage, item)`. |
-| For any label: what the labeler was shown | `labels.csv` has `shown_content_hash`, `shown_prior_ids`, `show_prior` and `shown_consensus_rule`. Check `shown_content_hash` against the item's `content_hash` and against `sha256sum out/png/<item>.png`. |
+| For any label: what the labeler was shown | `labels.csv` has `shown_content_hash`, `shown_prior_ids`, `show_prior`, `shown_consensus_rule` and `started_from` (the earlier label the expert copied into the editor, if any; `changed_from_start` gives the per-structure IoU and per-answer agreement with it). Check `shown_content_hash` against the item's `content_hash` and against `sha256sum out/png/<item>.png`. |
 | For any item still waiting: why | `items.csv` rows with `status` = `in_progress`, then the "waiting" part of `explain/<item>.txt`. |
 | For any role change or config edit: who, when, what | The `role_granted`, `role_revoked` and `config_activated` events in `events.jsonl` (`actor`, `at`, `because` or reason). `versions.json` has each edit's diff. |
 | Rebuilding from the log reproduces the current state | `python -m labelflow.store.rebuild … --verify-only` exits 0. It replays the log, compares the result with the tables and verifies the hash chain. |
@@ -194,5 +198,8 @@ Beyond the checklist, the pilot measures:
   each trainee, annotator and expert against the SCR reference, per structure.
 - **Annotator agreement** on the double reads, from the `consensus_checked` events and the
   `.disagreed` count.
+- **Anchoring in adjudication**: how often experts started from a read (`started_from`)
+  and how much they changed it (`changed_from_start`). An IoU of 1 on every structure means
+  the read was accepted as it was.
 - **Nodule detection by difficulty**: join `labels.csv` to the `subtlety` property in
   `items.json`.

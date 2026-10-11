@@ -194,6 +194,8 @@ The settings combine freely. For example, "an expert reviews 20% of images, and 
 
 **`show_prior`** controls what a reviewer starts from (decided). By default, a reviewer sees earlier labels as layers they can toggle, with the agreed and disputed parts flagged. Starting from earlier work nudges reviewers toward accepting it, so the setting is visible in the config and a stage can opt into blind review (`show_prior: false`).
 
+**Starting from an earlier label (decided, Oct 11, 2026).** In a stage that shows earlier labels, a reviewer may click "Start from this layer" on one of them. Its masks and classifications are copied into the editor, so the reviewer corrects it instead of redrawing every structure. The step can be undone. The anchoring risk is accepted, but it must be measurable, so the label records which earlier label it started from (`started_from`, one of the earlier labels shown) in the event log. The record stays even if the reviewer then clears the editor. The labels export compares each such label with its start using the label task's consensus check, so researchers can see whether reviewers edit what they start from or accept it as it is. A blind stage offers nothing to start from.
+
 **When a stage's roles are too small (proposed).** If `labels_per_item` exceeds the number of people currently holding the stage's roles, validation warns when the workflow starts and again on each role change.
 
 ### Extending later: three extension points (proposed)
@@ -349,6 +351,7 @@ Provenance is the center of gravity for phase 1, built in from the first commit 
   - the image's content hash, taken at import;
   - the IDs of any earlier labels shown;
   - the `show_prior` setting;
+  - the earlier label the labeler started from, if any;
   - the version of the consensus rule behind any flags;
 - the ontology version;
 - time from claim to submit, as reported by the interface.

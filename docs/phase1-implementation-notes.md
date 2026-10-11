@@ -170,6 +170,22 @@ on `main` is `e77c9d0`. To tag it, run
     stale base version for an edit, and claiming in a paused stage) give 409; "not yours" and "not eligible" give 403;
     invalid input, labels, configs and refused edits give 422.
 
+### Provenance of a review
+
+34. **Decided: a reviewer may start from an earlier label** (Hudson, Oct 11, 2026). In a
+    stage that shows earlier labels, "Start from this layer" copies one earlier label's masks
+    and classifications into the editor, as one undoable step. The label reports it as
+    `shown.started_from`. The engine accepts it only if it is one of the reported
+    `prior_label_ids`, so never in a blind stage. It is logged in `label_submitted` (left out
+    of the event's JSON when unset, so older events keep their hashes) and stored in
+    `labels.started_from` (migration 0005). `explain` says "dr_smith started from label 12".
+    The labels export gives `started_from` and `changed_from_start`: the label task's
+    consensus check of the label against its start (agreed, rule version, and per-field
+    detail such as the IoU per mask class). This is computed at export time from the two
+    stored labels and is not stored, so researchers can see whether reviewers edit or
+    rubber-stamp. "Clear all" after a start keeps `started_from` (the reviewer did start from
+    it); undoing the start removes it.
+
 ## Hardening after review (Oct 11, 2026)
 
 A read-only review of the first merge found these, all now fixed:

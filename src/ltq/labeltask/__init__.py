@@ -8,6 +8,8 @@ from ltq.labeltask.base import (
     LabelValidationError,
     UnknownLabelTask,
 )
+from ltq.labeltask.ontology import Ontology, OntologyError
+from ltq.labeltask.ontology_task import OntologyLabelTask, load_ontology, registry_from_directory
 
 __all__ = [
     "ConsensusResult",
@@ -15,5 +17,10 @@ __all__ = [
     "LabelTask",
     "LabelTaskRegistry",
     "LabelValidationError",
+    "Ontology",
+    "OntologyError",
+    "OntologyLabelTask",
     "UnknownLabelTask",
+    "load_ontology",
+    "registry_from_directory",
 ]

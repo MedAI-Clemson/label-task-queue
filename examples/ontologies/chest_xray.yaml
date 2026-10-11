@@ -1,0 +1,23 @@
+# An ontology for labeling chest X-rays. A workflow refers to it as image_ontology@1.
+#
+# If you change anything below, change the version too. Every label records the
+# ontology version, so a changed file with the same version could not be told apart.
+
+name: image_ontology
+version: 1
+
+classifications:
+  - name: view
+    values: [PA, AP, lateral]
+    required: true
+  - name: quality
+    values: [good, poor]
+    required: false
+
+# One mask per class (semantic segmentation). The threshold is the IoU (intersection
+# over union) at or above which two labelers' masks count as agreeing.
+masks:
+  - name: lung
+    threshold: 0.8
+  - name: effusion
+    threshold: 0.5

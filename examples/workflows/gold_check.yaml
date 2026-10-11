@@ -1,0 +1,26 @@
+# Ordinary labeling with a quality check built in: a few gold-standard images are mixed
+# into the batch, and a blind expert review of a 10% sample.
+#
+# Two things this shows beyond review_sample.yaml:
+# - 'score_against' on an ordinary stage. Only the gold images carry a 'gold_key'
+#   property; for the rest, the score is logged as 'no_key' and nothing else changes.
+#   The score report then gives each annotator's agreement on the gold images alone.
+# - 'show_prior: false'. The reviewer does not see the annotation, so the review is an
+#   independent second read rather than a check of the first.
+
+workflow: xray_batch_2_checked
+dataset: xray_batch_2             # ordinary images plus a few with a 'gold_key' property
+label_task: image_ontology@1
+
+stages:
+  - name: annotate
+    assign_to: annotator
+    score_against: gold_key       # scored where the image has a key; 'no_key' otherwise
+
+  - name: blind_review
+    input: annotate
+    assign_to: expert
+    sample: 0.1                   # 10% of annotated images, by hashed draw
+    show_prior: false             # blind: the expert is not shown the annotation
+
+final: [blind_review, annotate]   # the expert's label wins where there is one

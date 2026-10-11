@@ -1,0 +1,22 @@
+# Agreement measured on a subset: 20% of images get three independent reads; the rest get
+# one. Where the three disagree, an expert decides.
+#
+# 'labels_per_item' can be a whole number, 'all', or {count, fraction}. The last form is
+# how to estimate inter-rater agreement without tripling the whole budget. Which images
+# get three reads is a hashed draw, independent of any 'sample' draw on the same stage.
+
+workflow: xray_spot_checked
+dataset: xray_batch_1
+label_task: image_ontology@1
+
+stages:
+  - name: annotate
+    assign_to: annotator
+    labels_per_item: {count: 3, fraction: 0.2}   # 20% of images get 3 reads, the rest 1
+
+  - name: adjudicate
+    input: annotate.disagreed     # only triple-read images can disagree; single reads
+    assign_to: expert             # appear only in the plain 'annotate' output
+
+final: [adjudicate, annotate]     # disputed images: the expert's label; agreed triples: the
+                                  # agreed label; single reads: that one label

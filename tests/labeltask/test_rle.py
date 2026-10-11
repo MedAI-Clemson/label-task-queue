@@ -96,6 +96,11 @@ def test_decode_gives_height_by_width_booleans():
     decoded = rle.decode({"size": [3, 2], "counts": [0, 2, 2, 1, 1]})
     assert decoded.dtype == bool
     assert decoded.shape == (3, 2)
+    # Zero-length runs in the middle are unusual but they decode to the one obvious mask.
+    assert rle.decode({"size": [2, 2], "counts": [0, 0, 2, 2]}).tolist() == [
+        [False, True],
+        [False, True],
+    ]
 
 
 def test_area_counts_foreground_pixels():
@@ -104,30 +109,17 @@ def test_area_counts_foreground_pixels():
     assert rle.area({"size": [2, 2], "counts": [4]}) == 0
 
 
-def test_conversion_between_the_two_forms():
+def test_conversion_between_the_two_forms_gives_new_dicts():
     uncompressed = {"size": [3, 2], "counts": [0, 2, 2, 1, 1]}
     compressed = {"size": [3, 2], "counts": "022OO"}
     assert rle.to_compressed(uncompressed) == compressed
     assert rle.to_uncompressed(compressed) == uncompressed
+    assert uncompressed == {"size": [3, 2], "counts": [0, 2, 2, 1, 1]}  # the input is untouched
     # A mask already in the requested form comes back as an equal, separate dict.
     again = rle.to_uncompressed(uncompressed)
     assert again == uncompressed
     assert again is not uncompressed
     assert again["counts"] is not uncompressed["counts"]
-
-
-def test_conversion_does_not_change_its_input():
-    original = {"size": [3, 2], "counts": [0, 2, 2, 1, 1]}
-    rle.to_compressed(original)
-    assert original == {"size": [3, 2], "counts": [0, 2, 2, 1, 1]}
-
-
-def test_runs_may_be_non_canonical():
-    # Zero-length runs in the middle are unusual but they decode to the one obvious mask.
-    assert rle.decode({"size": [2, 2], "counts": [0, 0, 2, 2]}).tolist() == [
-        [False, True],
-        [False, True],
-    ]
 
 
 # --- Hypothesis round trips ---------------------------------------------------------------
@@ -141,6 +133,18 @@ def test_decode_undoes_encode(mask, compressed):
 
 
 @given(masks)
+def test_the_runs_describe_the_mask_column_by_column(mask):
+    counts = rle.encode(mask, compressed=False)["counts"]
+    assert sum(counts) == mask.size
+    assert all(run > 0 for run in counts[1:])  # only the first run may be empty
+    assert (counts[0] == 0) == bool(mask[0, 0])
+    # Reading the mask column by column gives the same pixels as the runs describe.
+    pixels = np.repeat(np.arange(len(counts)) % 2 == 1, counts)
+    assert np.array_equal(pixels, mask.T.ravel())
+    assert rle.area(rle.encode(mask)) == rle.area(rle.encode(mask, compressed=False)) == mask.sum()
+
+
+@given(masks)
 def test_both_forms_describe_the_same_mask(mask):
     uncompressed = rle.encode(mask, compressed=False)
     compressed = rle.encode(mask, compressed=True)
@@ -149,50 +153,24 @@ def test_both_forms_describe_the_same_mask(mask):
     assert rle.to_uncompressed(rle.to_compressed(uncompressed)) == uncompressed
 
 
-@given(masks)
-def test_area_is_the_number_of_foreground_pixels(mask):
-    expected = int(mask.sum())
-    assert rle.area(rle.encode(mask)) == expected
-    assert rle.area(rle.encode(mask, compressed=False)) == expected
-
-
-@given(masks)
-def test_counts_start_with_background_and_add_up(mask):
-    counts = rle.encode(mask, compressed=False)["counts"]
-    assert sum(counts) == mask.size
-    assert all(run > 0 for run in counts[1:])  # only the first run may be empty
-    assert (counts[0] == 0) == bool(mask[0, 0])
-
-
 @given(st.lists(st.integers(min_value=0, max_value=2**31), min_size=1, max_size=40))
 def test_counts_survive_the_string_form(counts):
     assert rle.counts_from_string(rle.counts_to_string(counts)) == counts
 
 
-@given(masks)
-def test_encoding_follows_the_column_major_order(mask):
-    # Reading the mask column by column gives the same pixels as the runs describe.
-    counts = rle.encode(mask, compressed=False)["counts"]
-    pixels = np.repeat(np.arange(len(counts)) % 2 == 1, counts)
-    assert np.array_equal(pixels, mask.T.ravel())
-
-
 # --- IoU ----------------------------------------------------------------------------------
 
 
-def test_iou_of_overlapping_masks():
-    first = mask_from_rows("###.", "....")
-    second = mask_from_rows(".###", "....")
-    assert rle.mask_iou(first, second) == 2 / 4
-
-
-def test_iou_of_two_empty_masks_is_one():
-    empty = mask_from_rows("...", "...")
-    assert rle.mask_iou(empty, empty) == 1.0
-
-
-def test_iou_of_empty_against_non_empty_is_zero():
-    assert rle.mask_iou(mask_from_rows("..."), mask_from_rows("#..")) == 0.0
+@pytest.mark.parametrize(
+    ("first", "second", "iou"),
+    [
+        pytest.param(["###.", "...."], [".###", "...."], 2 / 4, id="overlapping"),
+        pytest.param(["...", "..."], ["...", "..."], 1.0, id="two-empty-masks-agree"),
+        pytest.param(["..."], ["#.."], 0.0, id="empty-against-non-empty"),
+    ],
+)
+def test_iou(first, second, iou):
+    assert rle.mask_iou(mask_from_rows(*first), mask_from_rows(*second)) == iou
 
 
 def test_iou_needs_masks_of_the_same_size():
@@ -274,21 +252,14 @@ BAD_MASKS = [
 
 
 @pytest.mark.parametrize(("bad", "message"), BAD_MASKS)
-def test_problems_are_plain_language(bad, message):
+def test_a_bad_mask_is_described_plainly_and_refused_everywhere(bad, message):
     assert any(message in problem for problem in rle.problems(bad))
-
-
-@pytest.mark.parametrize(("bad", "message"), BAD_MASKS)
-def test_validate_and_decode_refuse_a_bad_mask(bad, message):
     with pytest.raises(RLEError, match="Not a valid COCO RLE") as info:
         rle.validate(bad)
     assert any(message in problem for problem in info.value.problems)
-    with pytest.raises(RLEError):
-        rle.decode(bad)
-    with pytest.raises(RLEError):
-        rle.area(bad)
-    with pytest.raises(RLEError):
-        rle.to_compressed(bad)
+    for use in (rle.decode, rle.area, rle.to_compressed, rle.to_uncompressed):
+        with pytest.raises(RLEError):
+            use(bad)
 
 
 def test_a_mask_can_have_several_problems_at_once():
@@ -299,3 +270,4 @@ def test_a_mask_can_have_several_problems_at_once():
 def test_a_good_mask_has_no_problems():
     assert rle.problems({"size": [3, 2], "counts": "022OO"}) == []
     assert rle.problems({"size": [3, 2], "counts": [0, 2, 2, 1, 1]}) == []
+    rle.validate({"size": [3, 2], "counts": (0, 2, 2, 1, 1)})  # a tuple is a list too

@@ -15,9 +15,12 @@ def example_dir() -> Path:
     return EXAMPLE_ONTOLOGIES
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def task() -> OntologyLabelTask:
-    """The example chest X-ray ontology (masks: lung at 0.8, effusion at 0.5)."""
+    """The example chest X-ray ontology (masks: lung at 0.8, effusion at 0.5).
+
+    Session-scoped (a label task is never changed by use), so Hypothesis tests can take it.
+    """
     return load_ontology(EXAMPLE_ONTOLOGIES / "chest_xray.yaml")
 
 

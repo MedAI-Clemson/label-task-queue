@@ -23,13 +23,15 @@ from pathlib import Path
 from typing import Any
 
 from labelflow.labeltask import rle
-from labelflow.labeltask._messages import describe_kind, did_you_mean, quoted
 from labelflow.labeltask.base import (
     ConsensusResult,
     Label,
     LabelTask,
     LabelTaskRegistry,
     LabelValidationError,
+    describe_kind,
+    did_you_mean,
+    quoted,
 )
 from labelflow.labeltask.ontology import (
     Classification,
@@ -43,6 +45,11 @@ CONSENSUS_RULE_VERSION = "ontology-consensus@1"
 """Bump this if the rule below ever changes, so old answers stay interpretable."""
 
 LABEL_KEYS = ("classifications", "masks")
+
+_EMPTY_MASK_HINT = (
+    "Every mask class must be present; for an empty mask, give an RLE with no foreground, "
+    'such as {"size": [512, 512], "counts": [262144]} for a 512 x 512 image.'
+)
 
 
 class OntologyLabelTask(LabelTask):
@@ -76,13 +83,12 @@ class OntologyLabelTask(LabelTask):
             raise LabelValidationError(
                 [f"A label must be an object with 'classifications' and 'masks', not {kind}."]
             )
-        problems = []
-        for key in label:
-            if key not in LABEL_KEYS:
-                problems.append(
-                    f"Unknown key {key!r} in the label.{did_you_mean(key, LABEL_KEYS)} "
-                    f"A label has only {quoted(LABEL_KEYS)}."
-                )
+        problems = [
+            f"Unknown key {key!r} in the label.{did_you_mean(key, LABEL_KEYS)} "
+            f"A label has only {quoted(LABEL_KEYS)}."
+            for key in label
+            if key not in LABEL_KEYS
+        ]
         problems += self._classification_problems(label.get("classifications"))
         problems += self._mask_problems(label.get("masks"))
         if problems:
@@ -100,7 +106,7 @@ class OntologyLabelTask(LabelTask):
         for name, value in classifications.items():
             spec = self._classifications.get(name)
             if spec is None:
-                problems.append(self._unknown_name_problem(name, is_mask=False))
+                problems.append(self._unknown_name(name, "classifications"))
             elif value is not None and value not in spec.values:
                 problems.append(
                     f"Classification {name!r} has the value {value!r}, which is not allowed."
@@ -122,22 +128,18 @@ class OntologyLabelTask(LabelTask):
             return [f"'masks' must be an object that gives an RLE for each mask class, not {kind}."]
 
         problems = []
-        sizes: dict[str, tuple[int, int]] = {}
+        sizes: dict[str, tuple[int, int]] = {}  # of the masks that are valid RLEs
         for name, mask in masks.items():
             if name not in self._mask_classes:
-                problems.append(self._unknown_name_problem(name, is_mask=True))
-                continue
-            found = rle.problems(mask)
-            problems += [f"Mask {name!r} is not a valid COCO RLE: {problem}." for problem in found]
-            if not found:
-                sizes[name] = (mask["size"][0], mask["size"][1])
+                problems.append(self._unknown_name(name, "masks"))
+            elif found := rle.problems(mask):
+                lead_in = f"Mask {name!r} is not a valid COCO RLE"
+                problems += [f"{lead_in}: {problem}." for problem in found]
+            else:
+                sizes[name] = tuple(mask["size"])
         for name in self._mask_classes:
             if name not in masks:
-                problems.append(
-                    f"The mask for {name!r} is missing. Every mask class must be present; for an "
-                    "empty mask, give an RLE with no foreground, such as "
-                    '{"size": [512, 512], "counts": [262144]} for a 512 x 512 image.'
-                )
+                problems.append(f"The mask for {name!r} is missing. {_EMPTY_MASK_HINT}")
         if len(set(sizes.values())) > 1:
             listing = ", ".join(f"{name!r} is {h} x {w}" for name, (h, w) in sizes.items())
             problems.append(
@@ -146,20 +148,19 @@ class OntologyLabelTask(LabelTask):
             )
         return problems
 
-    def _unknown_name_problem(self, name: object, is_mask: bool) -> str:
+    def _unknown_name(self, name: object, section: str) -> str:
         """Say that a name is not in the ontology, with a suggestion where possible."""
-        if is_mask:
-            kind, plural, known = "mask class", "mask classes", list(self._mask_classes)
+        if section == "classifications":
+            kind, plural, known = "classification", "classifications", self._classifications
+            if name in self._mask_classes:
+                return f"{name!r} is a mask class, not a classification. Put it under 'masks'."
+        else:
+            kind, plural, known = "mask class", "mask classes", self._mask_classes
             if name in self._classifications:
                 return (
                     f"{name!r} is a classification, not a mask class. "
                     "Put it under 'classifications'."
                 )
-        else:
-            kind, plural, known = "classification", "classifications", list(self._classifications)
-            if name in self._mask_classes:
-                return f"{name!r} is a mask class, not a classification. Put it under 'masks'."
-
         message = f"Unknown {kind} {name!r}."
         if suggestion := did_you_mean(name, known):
             return message + suggestion
@@ -183,10 +184,10 @@ class OntologyLabelTask(LabelTask):
             raise ValueError(f"A consensus check needs at least two labels, but got {len(labels)}.")
 
         classifications = {
-            item.name: self._compare_classification(item, labels)
+            item.name: _compare_classification(item, labels)
             for item in self.ontology.classifications
         }
-        masks = {item.name: self._compare_masks(item, labels) for item in self.ontology.masks}
+        masks = {item.name: _compare_masks(item, labels) for item in self.ontology.masks}
         agreed = all(field["agreed"] for field in (*classifications.values(), *masks.values()))
         return ConsensusResult(
             agreed=agreed,
@@ -194,43 +195,6 @@ class OntologyLabelTask(LabelTask):
             detail={"classifications": classifications, "masks": masks},
             rule_version=self.consensus_rule_version,
         )
-
-    @staticmethod
-    def _compare_classification(item: Classification, labels: Sequence[Label]) -> dict[str, Any]:
-        values = [_part(label, "classifications").get(item.name) for label in labels]
-        return {"agreed": all(value == values[0] for value in values), "values": values}
-
-    @staticmethod
-    def _compare_masks(item: MaskClass, labels: Sequence[Label]) -> dict[str, Any]:
-        """Compare one mask class across labels.
-
-        The result has ``agreed``, the class ``threshold``, ``min_iou`` (the lowest pairwise
-        IoU), ``pairwise_iou`` (a list of ``[i, j, iou]`` for the labels at positions i and j),
-        and ``sizes`` (the ``[height, width]`` of each label's mask). If the masks are not all
-        the same size they disagree, and ``min_iou`` and the IoU of each mismatched pair are
-        None, since an IoU is not defined between masks of different sizes.
-        """
-        encoded = [_part(label, "masks")[item.name] for label in labels]
-        sizes = [list(mask["size"]) for mask in encoded]
-        pixels = [rle.decode(mask) for mask in encoded]
-
-        pairwise = []
-        for i, j in combinations(range(len(labels)), 2):
-            iou = rle.mask_iou(pixels[i], pixels[j]) if sizes[i] == sizes[j] else None
-            pairwise.append((i, j, iou))
-
-        all_pairs_comparable = all(iou is not None for _, _, iou in pairwise)
-        lowest = min(iou for _, _, iou in pairwise) if all_pairs_comparable else None
-        # Agreement uses the exact IoU; only the reported numbers are rounded.
-        return {
-            "agreed": lowest is not None and lowest >= item.threshold,
-            "threshold": item.threshold,
-            "min_iou": _rounded(lowest),
-            "pairwise_iou": [[i, j, _rounded(iou)] for i, j, iou in pairwise],
-            "sizes": sizes,
-        }
-
-    # --- Scoring --------------------------------------------------------------------------
 
     def score(self, label: Label, key: Label) -> ConsensusResult:
         """Compare a label with a key (consensus on the two), after checking the key is valid."""
@@ -241,6 +205,40 @@ class OntologyLabelTask(LabelTask):
                 [f"The key is invalid. {problem}" for problem in error.problems]
             ) from None
         return super().score(label, key)
+
+
+def _compare_classification(item: Classification, labels: Sequence[Label]) -> dict[str, Any]:
+    values = [_part(label, "classifications").get(item.name) for label in labels]
+    return {"agreed": all(value == values[0] for value in values), "values": values}
+
+
+def _compare_masks(item: MaskClass, labels: Sequence[Label]) -> dict[str, Any]:
+    """Compare one mask class across labels.
+
+    The result has ``agreed``, the class ``threshold``, ``min_iou`` (the lowest pairwise
+    IoU), ``pairwise_iou`` (a list of ``[i, j, iou]`` for the labels at positions i and j),
+    and ``sizes`` (the ``[height, width]`` of each label's mask). If the masks are not all
+    the same size they disagree, and ``min_iou`` and the IoU of each mismatched pair are
+    None, since an IoU is not defined between masks of different sizes.
+    """
+    encoded = [_part(label, "masks")[item.name] for label in labels]
+    sizes = [list(mask["size"]) for mask in encoded]
+    pixels = [rle.decode(mask) for mask in encoded]
+
+    pairwise = [
+        (i, j, rle.mask_iou(pixels[i], pixels[j]) if sizes[i] == sizes[j] else None)
+        for i, j in combinations(range(len(labels)), 2)
+    ]
+    ious = [iou for _, _, iou in pairwise]
+    lowest = None if None in ious else min(ious)
+    # Agreement uses the exact IoU; only the reported numbers are rounded.
+    return {
+        "agreed": lowest is not None and lowest >= item.threshold,
+        "threshold": item.threshold,
+        "min_iou": _rounded(lowest),
+        "pairwise_iou": [[i, j, _rounded(iou)] for i, j, iou in pairwise],
+        "sizes": sizes,
+    }
 
 
 def _part(label: Label, section: str) -> dict[str, Any]:
@@ -275,7 +273,7 @@ def registry_from_directory(directory: str | Path) -> LabelTaskRegistry:
         raise OntologyError([f"There is no folder at {str(directory)!r}."], where)
 
     tasks: list[OntologyLabelTask] = []
-    defined_in: dict[str, str] = {}
+    defined_in: dict[str, str] = {}  # ref -> the file that defined it first
     problems: list[str] = []
     for path in sorted(directory.glob("*.yaml")):
         if not path.is_file():

@@ -8,6 +8,9 @@ The workflow never opens a label. It asks a label task three things:
 
 A label task is code, named and versioned, registered with a deployment, and referenced
 from a workflow config as ``name@version``, for example ``image_ontology@1``.
+
+Every message a label task produces is read by a labeler or by the person who wrote the
+ontology, so the helpers at the end of this module phrase things in plain language.
 """
 
 from __future__ import annotations
@@ -101,14 +104,11 @@ class UnknownLabelTask(KeyError):
 
     def __init__(self, ref: str, known: Iterable[str]):
         self.ref = ref
-        message = f"No label task named '{ref}' is registered."
-        if close := difflib.get_close_matches(ref, list(known), n=1):
-            message += f" Did you mean '{close[0]}'?"
-        self.message = message
-        super().__init__(message)
+        self.message = f"No label task named '{ref}' is registered.{did_you_mean(ref, known)}"
+        super().__init__(self.message)
 
     def __str__(self) -> str:
-        return self.message
+        return self.message  # KeyError would put quotes around it
 
 
 class LabelTaskRegistry:
@@ -135,3 +135,37 @@ class LabelTaskRegistry:
 
     def refs(self) -> list[str]:
         return sorted(self._tasks)
+
+
+# --- Plain-language messages --------------------------------------------------------------
+
+_KINDS = {
+    bool: "true or false",
+    int: "a number",
+    float: "a number",
+    str: "text",
+    list: "a list",
+    tuple: "a list",
+    dict: "an object",
+}
+
+
+def describe_kind(value: object) -> str:
+    """Name the kind of a value as a labeler would see it in JSON: "null", "text", "a list"."""
+    if value is None:
+        return "null"
+    return _KINDS.get(type(value), f"a {type(value).__name__}")
+
+
+def quoted(items: Iterable[object]) -> str:
+    """Show items in quotes, separated by commas: 'PA', 'AP', 'lateral'."""
+    return ", ".join(repr(item) for item in items)
+
+
+def did_you_mean(word: object, options: Iterable[str]) -> str:
+    """A leading-space suggestion such as " Did you mean 'view'?", or "" if nothing is close."""
+    if not isinstance(word, str):
+        return ""
+    if close := difflib.get_close_matches(word, list(options), n=1):
+        return f" Did you mean {close[0]!r}?"
+    return ""

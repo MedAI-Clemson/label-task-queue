@@ -35,6 +35,7 @@ from typing import Annotated, Any
 
 import yaml
 from pydantic import (
+    AfterValidator,
     BaseModel,
     ConfigDict,
     Strict,
@@ -46,7 +47,7 @@ from pydantic import (
     model_validator,
 )
 
-from labelflow.labeltask._messages import describe_kind, did_you_mean, quoted
+from labelflow.labeltask.base import describe_kind, did_you_mean, quoted
 
 # A workflow refers to a label task as name@version, so the name needs a plain shape.
 _ONTOLOGY_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
@@ -66,6 +67,15 @@ class OntologyError(ValueError):
 # --- The models ---------------------------------------------------------------------------
 
 
+def _not_blank(name: str) -> str:
+    if not name.strip():
+        raise ValueError("name must not be empty")
+    return name
+
+
+_Name = Annotated[StrictStr, AfterValidator(_not_blank)]
+
+
 class _FileModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -73,15 +83,10 @@ class _FileModel(BaseModel):
 class Classification(_FileModel):
     """A choice from a fixed list of values, such as the view of a chest X-ray."""
 
-    name: StrictStr
+    name: _Name
     values: tuple[StrictStr, ...]
     required: StrictBool = True
     """A required classification must be answered; an optional one may be left out."""
-
-    @field_validator("name")
-    @classmethod
-    def _name_is_not_blank(cls, name: str) -> str:
-        return _check_not_blank(name, "name")
 
     @field_validator("values")
     @classmethod
@@ -90,8 +95,7 @@ class Classification(_FileModel):
             raise ValueError("values must list at least one allowed value")
         if any(not value.strip() for value in values):
             raise ValueError("values must not contain an empty or blank value")
-        repeated = [value for value, n in Counter(values).items() if n > 1]
-        if repeated:
+        if repeated := _repeated(values):
             raise ValueError(f"values lists {quoted(repeated)} more than once")
         return values
 
@@ -99,19 +103,14 @@ class Classification(_FileModel):
 class MaskClass(_FileModel):
     """A class that is labeled with a mask, such as the lungs."""
 
-    name: StrictStr
+    name: _Name
     threshold: Annotated[float, Strict()]
     """The IoU at or above which two masks of this class agree."""
-
-    @field_validator("name")
-    @classmethod
-    def _name_is_not_blank(cls, name: str) -> str:
-        return _check_not_blank(name, "name")
 
     @field_validator("threshold")
     @classmethod
     def _threshold_is_a_fraction(cls, threshold: float) -> float:
-        if not 0 < threshold <= 1:
+        if not 0 < threshold <= 1:  # also catches NaN
             raise ValueError(
                 f"threshold must be above 0 and at most 1 (it is the IoU at or above which "
                 f"two masks agree), but it is {threshold}"
@@ -152,27 +151,25 @@ class Ontology(_FileModel):
             raise ValueError(
                 "The ontology has no classifications and no masks, so there is nothing to label."
             )
-        repeated = [name for name, n in Counter(names).items() if n > 1]
-        if repeated:
+        if repeated := _repeated(names):
             raise ValueError(
                 f"Names must be unique across classifications and masks, but {quoted(repeated)} "
                 "appears more than once."
             )
         return self
 
-    def canonical_json(self) -> str:
-        """The ontology as JSON with a fixed layout, so that equal ontologies give equal text."""
-        return json.dumps(self.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
-
     def fingerprint(self) -> str:
-        """The first 12 hex characters of the SHA-256 of the canonical JSON."""
-        return hashlib.sha256(self.canonical_json().encode("utf-8")).hexdigest()[:12]
+        """Twelve hex characters that change whenever the ontology's content changes.
+
+        The SHA-256 is taken over the ontology as JSON with sorted keys and no spaces, so
+        comments, key order and layout in the file make no difference.
+        """
+        canonical = json.dumps(self.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:12]
 
 
-def _check_not_blank(text: str, what: str) -> str:
-    if not text.strip():
-        raise ValueError(f"{what} must not be empty")
-    return text
+def _repeated(items: Sequence[str]) -> list[str]:
+    return [item for item, n in Counter(items).items() if n > 1]
 
 
 # --- Reading a file -----------------------------------------------------------------------
@@ -218,9 +215,8 @@ def _parse_text(text: str, source: str) -> Ontology:
     try:
         return Ontology.model_validate(data)
     except ValidationError as error:
-        raise OntologyError(
-            [_plain_problem(item, data) for item in error.errors()], source
-        ) from None
+        problems = [_plain_problem(item, data) for item in error.errors()]
+        raise OntologyError(problems, source) from None
 
 
 class _UniqueKeyLoader(yaml.SafeLoader):
@@ -233,10 +229,7 @@ class _UniqueKeyLoader(yaml.SafeLoader):
             try:
                 if key in seen:
                     raise yaml.constructor.ConstructorError(
-                        None,
-                        None,
-                        f"the key {key!r} appears more than once",
-                        key_node.start_mark,
+                        None, None, f"the key {key!r} appears more than once", key_node.start_mark
                     )
                 seen.add(key)
             except TypeError:
@@ -253,30 +246,53 @@ def _describe_yaml_error(error: yaml.YAMLError) -> str:
 
 # --- Turning pydantic's errors into plain language ----------------------------------------
 
+# What each kind of pydantic error means, as a sentence about the field ("{}"). The models
+# use strict types, so these are the kinds that can occur; anything else falls back to
+# pydantic's own wording.
+_REASONS = {
+    "missing": "{} is required but missing.",
+    "string_type": (
+        "{} must be text. In YAML, put quotes around words such as yes, no, on and off, and "
+        "around numbers, if you mean them as text."
+    ),
+    "int_type": "{} must be a whole number.",
+    "float_type": "{} must be a number.",
+    "bool_type": "{} must be true or false.",
+    "tuple_type": "{} must be a list.",
+    "model_type": "{} must be a set of keys and values (such as name: lung).",
+}
+
+_ALLOWED_KEYS = {
+    "classifications": list(Classification.model_fields),
+    "masks": list(MaskClass.model_fields),
+}
+
 
 def _plain_problem(item: Any, data: dict[str, Any]) -> str:
-    """Write one pydantic error as a sentence that says where the problem is."""
+    """Write one pydantic error as a sentence that says where the problem is.
+
+    ``loc`` is a path such as ``("masks", 1, "threshold")``: the entry it belongs to is
+    named ("mask class 'lung': ...") and the rest of the path becomes the subject.
+    """
     location = tuple(item["loc"])
-
     if item["type"] == "extra_forbidden":
-        place, message = location[:-1], _unknown_key(location[:-1], str(location[-1]))
-    elif location and isinstance(location[-1], int):  # one entry of a list
+        entry, message = location[:-1], _unknown_key(location[:-1], str(location[-1]))
+    elif location and isinstance(location[-1], int):  # one item of a list
         subject = f"item {location[-1] + 1} of {location[-2]!r}"
-        place, message = location[:-2], _what_is_wrong(item, subject)
+        entry, message = location[:-2], _reason(item, subject)
     elif location:
-        place, message = location[:-1], _what_is_wrong(item, repr(location[-1]))
+        entry, message = location[:-1], _reason(item, repr(location[-1]))
     else:
-        place, message = (), _what_is_wrong(item, "")
+        entry, message = (), _reason(item, "")
 
-    where = _where(place, data)
-    return f"{where}: {message}" if where else message[:1].upper() + message[1:]
+    if not entry:
+        return message[:1].upper() + message[1:]
+    section, index = entry
+    return f"{_entry_name(section, index, data)}: {message}"
 
 
-def _where(place: tuple[Any, ...], data: dict[str, Any]) -> str:
-    """Name the classification or mask class that a problem is in, such as "mask class 'lung'"."""
-    if not place:
-        return ""
-    section, index = place  # for example ("masks", 1)
+def _entry_name(section: str, index: int, data: dict[str, Any]) -> str:
+    """Name a classification or mask class, such as "mask class 'lung'" or "mask class #2"."""
     noun = "classification" if section == "classifications" else "mask class"
     entries = data.get(section)
     entry = entries[index] if isinstance(entries, list) and index < len(entries) else None
@@ -284,39 +300,19 @@ def _where(place: tuple[Any, ...], data: dict[str, Any]) -> str:
     return f"{noun} {name!r}" if isinstance(name, str) else f"{noun} #{index + 1}"
 
 
-def _unknown_key(place: tuple[Any, ...], key: str) -> str:
+def _unknown_key(entry: tuple[Any, ...], key: str) -> str:
     """Say that a key is unknown, with a suggestion and the keys that are allowed."""
-    if not place:
-        allowed = list(Ontology.model_fields)
-    elif place[0] == "classifications":
-        allowed = list(Classification.model_fields)
-    else:
-        allowed = list(MaskClass.model_fields)
+    allowed = _ALLOWED_KEYS[entry[0]] if entry else list(Ontology.model_fields)
     return (
         f"unknown key {key!r}.{did_you_mean(key, allowed)} The allowed keys are {quoted(allowed)}."
     )
 
 
-def _what_is_wrong(item: Any, subject: str) -> str:
+def _reason(item: Any, subject: str) -> str:
     """The plain-language reason for one pydantic error, as a sentence about ``subject``."""
     kind = item["type"]
-    if kind == "value_error":
+    if kind == "value_error":  # raised by one of the validators above, already in plain words
         return str(item["ctx"]["error"])
-    if kind == "missing":
-        return f"{subject} is required but missing."
-    if kind == "string_type":
-        return (
-            f"{subject} must be text. In YAML, put quotes around words such as yes, no, on "
-            "and off, and around numbers, if you mean them as text."
-        )
-    if kind in ("int_type", "int_parsing", "int_from_float"):
-        return f"{subject} must be a whole number."
-    if kind in ("float_type", "float_parsing"):
-        return f"{subject} must be a number."
-    if kind == "bool_type":
-        return f"{subject} must be true or false."
-    if kind in ("tuple_type", "list_type"):
-        return f"{subject} must be a list."
-    if kind in ("model_type", "dict_type", "model_attributes_type"):
-        return f"{subject} must be a set of keys and values (such as name: lung)."
+    if kind in _REASONS:
+        return _REASONS[kind].format(subject)
     return f"{subject}: {item['msg']}"

@@ -2,7 +2,6 @@
 
 import copy
 import json
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -10,15 +9,10 @@ from hypothesis import given
 from hypothesis import strategies as st
 from hypothesis.extra.numpy import arrays
 
-from labelflow.labeltask import ConsensusResult, LabelValidationError, load_ontology, rle
+from labelflow.labeltask import ConsensusResult, LabelValidationError, rle
 
 # Lung masks agree at an IoU of 0.8 or more, effusion masks at 0.5 or more.
-LUNG_THRESHOLD = 0.8
-EFFUSION_THRESHOLD = 0.5
-
-TASK = load_ontology(
-    Path(__file__).resolve().parents[2] / "examples" / "ontologies" / "chest_xray.yaml"
-)
+THRESHOLDS = {"lung": 0.8, "effusion": 0.5}
 
 
 def assert_plain_json(value):
@@ -67,10 +61,21 @@ def test_a_classification_mismatch_means_no_agreement(task, make_label):
     assert result.detail["masks"]["effusion"]["agreed"]
 
 
-def test_classifications_must_match_exactly(task, make_label):
-    result = task.check_consensus([make_label(quality="good"), make_label(quality="poor")])
-    assert not result.agreed
-    assert result.detail["classifications"]["quality"]["values"] == ["good", "poor"]
+@pytest.mark.parametrize(
+    ("first", "second", "agreed"),
+    [
+        pytest.param("good", "poor", False, id="different-values"),
+        pytest.param(None, None, True, id="both-left-out"),
+        pytest.param("good", None, False, id="given-by-only-one-labeler"),
+    ],
+)
+def test_classifications_must_match_exactly(task, make_label, first, second, agreed):
+    result = task.check_consensus([make_label(quality=first), make_label(quality=second)])
+    assert result.agreed is agreed
+    assert result.detail["classifications"]["quality"] == {
+        "agreed": agreed,
+        "values": [first, second],
+    }
 
 
 def test_absent_and_null_optional_classifications_are_the_same(task, make_label):
@@ -82,52 +87,39 @@ def test_absent_and_null_optional_classifications_are_the_same(task, make_label)
     assert result.detail["classifications"]["quality"] == {"agreed": True, "values": [None, None]}
 
 
-def test_an_optional_classification_given_by_only_one_labeler_disagrees(task, make_label):
-    result = task.check_consensus([make_label(quality="good"), make_label(quality=None)])
-    assert not result.agreed
-    assert result.detail["classifications"]["quality"] == {
-        "agreed": False,
-        "values": ["good", None],
-    }
-
-
 # --- IoU against the threshold ------------------------------------------------------------
 #
-# block(n) is a 10 x 10 mask with the first n pixels set, so block(n) against block(100) has
-# an IoU of exactly n / 100.
+# block(n) is a 10 x 10 mask with the first n pixels set, so block(n) against block(m) has
+# an IoU of exactly min(n, m) / max(n, m).
 
 
 @pytest.mark.parametrize(
-    ("pixels", "iou", "agreed"),
+    ("mask_class", "first", "second", "iou", "agreed"),
     [
-        (81, 0.81, True),  # just above the lung threshold of 0.8
-        (80, 0.8, True),  # exactly at the threshold: agrees
-        (79, 0.79, False),  # just below
+        pytest.param("lung", 100, 81, 0.81, True, id="lung-just-above"),
+        pytest.param("lung", 100, 80, 0.8, True, id="lung-exactly-at-the-threshold"),
+        pytest.param("lung", 100, 79, 0.79, False, id="lung-just-below"),
+        pytest.param("effusion", 100, 51, 0.51, True, id="effusion-just-above"),
+        pytest.param("effusion", 100, 50, 0.5, True, id="effusion-exactly-at-the-threshold"),
+        pytest.param("effusion", 100, 49, 0.49, False, id="effusion-just-below"),
+        pytest.param("lung", 0, 0, 1.0, True, id="two-empty-masks-agree"),
+        pytest.param("lung", 0, 1, 0.0, False, id="empty-against-non-empty"),
+        pytest.param("lung", 1, 0, 0.0, False, id="non-empty-against-empty"),
     ],
 )
-def test_lung_iou_against_its_threshold(task, make_label, block, pixels, iou, agreed):
-    first, second = make_label(lung=block(100)), make_label(lung=block(pixels))
-    result = task.check_consensus([first, second])
-    lung = result.detail["masks"]["lung"]
-    assert lung["pairwise_iou"] == [[0, 1, iou]]
-    assert lung["min_iou"] == iou
-    assert lung["threshold"] == LUNG_THRESHOLD
-    assert lung["agreed"] is agreed
-    assert result.agreed is agreed
-
-
-@pytest.mark.parametrize(
-    ("pixels", "iou", "agreed"), [(51, 0.51, True), (50, 0.5, True), (49, 0.49, False)]
-)
-def test_each_mask_class_has_its_own_threshold(task, make_label, block, pixels, iou, agreed):
-    first, second = make_label(effusion=block(100)), make_label(effusion=block(pixels))
-    result = task.check_consensus([first, second])
-    effusion = result.detail["masks"]["effusion"]
-    assert effusion["threshold"] == EFFUSION_THRESHOLD
-    assert effusion["pairwise_iou"] == [[0, 1, iou]]
-    assert effusion["agreed"] is agreed
-    assert result.detail["masks"]["lung"]["agreed"]  # the lung masks are identical
-    assert result.agreed is agreed
+def test_iou_against_the_class_threshold(
+    task, make_label, block, mask_class, first, second, iou, agreed
+):
+    labels = [make_label(**{mask_class: block(first)}), make_label(**{mask_class: block(second)})]
+    result = task.check_consensus(labels)
+    assert result.detail["masks"][mask_class] == {
+        "agreed": agreed,
+        "threshold": THRESHOLDS[mask_class],
+        "min_iou": iou,
+        "pairwise_iou": [[0, 1, iou]],
+        "sizes": [[10, 10], [10, 10]],
+    }
+    assert result.agreed is agreed  # the other mask class and the classifications agree
 
 
 def test_the_same_iou_can_agree_for_one_class_and_not_another(task, make_label, block):
@@ -175,27 +167,7 @@ def test_agreement_uses_the_exact_iou_not_the_rounded_one(task, make_label):
     assert not result.agreed
 
 
-# --- Empty masks and size mismatches ------------------------------------------------------
-
-
-def test_two_empty_masks_agree(task, make_label, block):
-    first, second = make_label(lung=block(0)), make_label(lung=block(0))
-    result = task.check_consensus([first, second])
-    assert result.agreed
-    assert result.detail["masks"]["lung"]["pairwise_iou"] == [[0, 1, 1.0]]
-    assert result.detail["masks"]["lung"]["min_iou"] == 1.0
-
-
-def test_an_empty_mask_against_a_non_empty_one_disagrees(task, make_label, block):
-    first, second = make_label(lung=block(0)), make_label(lung=block(1))
-    result = task.check_consensus([first, second])
-    assert not result.agreed
-    lung = result.detail["masks"]["lung"]
-    assert lung["pairwise_iou"] == [[0, 1, 0.0]]
-    assert lung["min_iou"] == 0.0
-    assert not lung["agreed"]
-    # the same the other way round
-    assert not task.check_consensus([second, first]).agreed
+# --- Size mismatches ----------------------------------------------------------------------
 
 
 def test_masks_of_different_sizes_disagree(task, make_label, block):
@@ -203,11 +175,13 @@ def test_masks_of_different_sizes_disagree(task, make_label, block):
     second = make_label(lung=block(25, 5, 5), effusion=block(0, 5, 5))
     result = task.check_consensus([first, second])
     assert not result.agreed
-    lung = result.detail["masks"]["lung"]
-    assert lung["agreed"] is False
-    assert lung["min_iou"] is None
-    assert lung["pairwise_iou"] == [[0, 1, None]]
-    assert lung["sizes"] == [[10, 10], [5, 5]]
+    assert result.detail["masks"]["lung"] == {
+        "agreed": False,
+        "threshold": 0.8,
+        "min_iou": None,
+        "pairwise_iou": [[0, 1, None]],
+        "sizes": [[10, 10], [5, 5]],
+    }
     # even two empty masks of different sizes disagree
     assert result.detail["masks"]["effusion"]["agreed"] is False
 
@@ -276,73 +250,48 @@ def test_three_labels_one_of_a_different_size(task, make_label, block):
 # --- The agreed label ---------------------------------------------------------------------
 
 
-def test_the_agreed_label_is_a_copy_of_the_first_not_a_merge(task, make_label, block):
-    first = make_label(lung=block(100), quality="good")
-    second = make_label(lung=block(90), quality="good")
-    third = make_label(lung=block(85), quality="good")
-    result = task.check_consensus([first, second, third])
+def test_the_agreed_label_is_a_copy_of_the_first_in_the_order_given(task, make_label, block):
+    big, medium, small = (make_label(lung=block(n)) for n in (100, 90, 85))
+    result = task.check_consensus([big, medium, small])
     assert result.agreed
-    assert result.agreed_label == first
-    assert result.agreed_label != second
+    assert result.agreed_label == big != medium  # a copy of the earliest, not a merge
     assert result.agreed_label["masks"]["lung"] == rle.encode(block(100))
-
-
-def test_the_agreed_label_is_the_earliest_submitted_one_in_the_order_given(task, make_label, block):
-    big, small = make_label(lung=block(100)), make_label(lung=block(90))
-    assert task.check_consensus([big, small]).agreed_label == big
     assert task.check_consensus([small, big]).agreed_label == small
 
 
-def test_changing_the_agreed_label_does_not_change_the_input(task, make_label):
-    first, second = make_label(), make_label()
-    snapshot = copy.deepcopy(first)
-    result = task.check_consensus([first, second])
-    assert result.agreed_label is not first
+def test_the_agreed_label_and_the_input_labels_are_independent_copies(task, make_label, block):
+    labels = [make_label(), make_label(), make_label(lung=block(10))]
+    snapshot = copy.deepcopy(labels)
+    task.check_consensus(labels)  # a disagreement
+    result = task.check_consensus(labels[:2])  # an agreement
+    assert labels == snapshot
+    assert result.agreed_label is not labels[0]
+    # changing the agreed label leaves the input alone
     result.agreed_label["classifications"]["view"] = "lateral"
     result.agreed_label["masks"]["lung"]["counts"] = "changed"
     del result.agreed_label["masks"]["effusion"]
-    assert first == snapshot
-    assert second == snapshot
-
-
-def test_changing_the_input_afterwards_does_not_change_the_agreed_label(task, make_label):
-    first, second = make_label(), make_label()
-    result = task.check_consensus([first, second])
-    first["classifications"]["view"] = "lateral"
-    first["masks"]["lung"]["size"][0] = 99
-    assert result.agreed_label["classifications"]["view"] == "PA"
-    assert result.agreed_label["masks"]["lung"]["size"] == [10, 10]
-
-
-def test_consensus_does_not_change_the_labels_it_is_given(task, make_label, block):
-    labels = [make_label(lung=block(100)), make_label(lung=block(10))]
-    snapshot = copy.deepcopy(labels)
-    task.check_consensus(labels)
     assert labels == snapshot
+    # and changing the input afterwards leaves the agreed label alone
+    labels[0]["classifications"]["view"] = "AP"
+    labels[0]["masks"]["lung"]["size"][0] = 99
+    assert result.agreed_label["classifications"]["view"] == "lateral"
+    assert result.agreed_label["masks"]["lung"]["size"] == [10, 10]
 
 
 # --- The detail is plain JSON -------------------------------------------------------------
 
 
-def test_the_detail_is_json_compatible(task, make_label, block):
-    labels = [make_label(lung=block(9)), make_label(lung=block(3)), make_label(view="AP")]
-    detail = task.check_consensus(labels).detail
-    assert json.loads(json.dumps(detail)) == detail  # nothing is lost, and no tuples
-    assert_plain_json(detail)
-
-
-def test_the_detail_is_json_compatible_when_sizes_differ(task, make_label, block):
-    labels = [make_label(), make_label(lung=block(100, 5, 20), effusion=block(0, 5, 20))]
-    detail = task.check_consensus(labels).detail
-    assert json.loads(json.dumps(detail)) == detail
-    assert_plain_json(detail)
-
-
-def test_the_detail_lists_every_field(task, make_label):
-    detail = task.check_consensus([make_label(), make_label()]).detail
-    assert list(detail) == ["classifications", "masks"]
-    assert list(detail["classifications"]) == ["view", "quality"]
-    assert list(detail["masks"]) == ["lung", "effusion"]
+def test_the_detail_is_json_compatible_and_lists_every_field(task, make_label, block):
+    for labels in (
+        [make_label(lung=block(9)), make_label(lung=block(3)), make_label(view="AP")],
+        [make_label(), make_label(lung=block(100, 5, 20), effusion=block(0, 5, 20))],
+    ):
+        detail = task.check_consensus(labels).detail
+        assert json.loads(json.dumps(detail)) == detail  # nothing is lost, and no tuples
+        assert_plain_json(detail)
+        assert list(detail) == ["classifications", "masks"]
+        assert list(detail["classifications"]) == ["view", "quality"]
+        assert list(detail["masks"]) == ["lung", "effusion"]
 
 
 # --- Fewer than two labels ----------------------------------------------------------------
@@ -357,35 +306,31 @@ def test_consensus_needs_at_least_two_labels(task, make_label, count):
 # --- Scoring against a key ----------------------------------------------------------------
 
 
-def test_a_label_that_matches_the_key_scores_as_agreeing(task, make_label):
-    result = task.score(make_label(), make_label())
-    assert result.agreed
-    assert result.rule_version == task.consensus_rule_version
-
-
 def test_scoring_is_consensus_on_the_label_and_the_key(task, make_label, block):
     label, key = make_label(lung=block(90)), make_label(lung=block(100))
     scored = task.score(label, key)
     assert scored == task.check_consensus([label, key])
+    assert scored.agreed
+    assert scored.rule_version == task.consensus_rule_version
     assert scored.detail["masks"]["lung"]["pairwise_iou"] == [[0, 1, 0.9]]
     assert scored.agreed_label == label  # the label is first, the key second
 
 
-def test_a_label_that_misses_the_key_does_not_score_as_agreeing(task, make_label, block):
-    key = make_label(view="PA", lung=block(100))
-    wrong_view = task.score(make_label(view="AP"), key)
-    assert not wrong_view.agreed
-    assert wrong_view.detail["classifications"]["view"]["values"] == ["AP", "PA"]
-    poor_mask = task.score(make_label(lung=block(50)), key)
-    assert not poor_mask.agreed
-    assert poor_mask.detail["masks"]["lung"]["pairwise_iou"] == [[0, 1, 0.5]]
-
-
-def test_scoring_uses_the_same_thresholds(task, make_label, block):
-    key = make_label(lung=block(100), effusion=block(100))
-    assert task.score(make_label(lung=block(80), effusion=block(50)), key).agreed
-    assert not task.score(make_label(lung=block(79), effusion=block(50)), key).agreed
-    assert not task.score(make_label(lung=block(80), effusion=block(49)), key).agreed
+@pytest.mark.parametrize(
+    ("view", "lung", "effusion", "agreed"),
+    [
+        pytest.param("PA", 80, 50, True, id="at-both-thresholds"),
+        pytest.param("AP", 100, 100, False, id="wrong-view"),
+        pytest.param("PA", 79, 50, False, id="lung-below-its-threshold"),
+        pytest.param("PA", 80, 49, False, id="effusion-below-its-threshold"),
+    ],
+)
+def test_scoring_uses_the_same_thresholds(task, make_label, block, view, lung, effusion, agreed):
+    key = make_label(view="PA", lung=block(100), effusion=block(100))
+    result = task.score(make_label(view=view, lung=block(lung), effusion=block(effusion)), key)
+    assert result.agreed is agreed
+    assert result.detail["classifications"]["view"]["values"] == [view, "PA"]
+    assert result.detail["masks"]["lung"]["pairwise_iou"] == [[0, 1, lung / 100]]
 
 
 def test_an_invalid_key_is_reported_as_the_key_not_the_label(task, make_label):
@@ -397,9 +342,7 @@ def test_an_invalid_key_is_reported_as_the_key_not_the_label(task, make_label):
         "allowed. Allowed values: 'PA', 'AP', 'lateral'."
     ]
     assert str(info.value).startswith("The key is invalid.")
-
-
-def test_every_problem_with_the_key_is_listed(task, make_label):
+    # every problem with the key is listed
     bad_key = {"classifications": {"veiw": "PA"}, "masks": {}}
     with pytest.raises(LabelValidationError) as info:
         task.score(make_label(), bad_key)
@@ -447,20 +390,16 @@ def iou(first: np.ndarray, second: np.ndarray) -> float:
 
 
 @given(label_pairs())
-def test_valid_random_labels_validate_to_equal_copies(labels):
-    for label in labels:
-        assert TASK.validate(label) == label
-
-
-@given(label_pairs())
-def test_consensus_matches_a_plain_numpy_calculation(labels):
+def test_consensus_matches_a_plain_numpy_calculation(task, labels):
     first, second = labels
-    result = TASK.check_consensus(labels)
+    for label in labels:
+        assert task.validate(label) == label
+    result = task.check_consensus(labels)
 
     expected = True
     for name in ("view", "quality"):
         expected &= first["classifications"].get(name) == second["classifications"].get(name)
-    for name, threshold in (("lung", LUNG_THRESHOLD), ("effusion", EFFUSION_THRESHOLD)):
+    for name, threshold in THRESHOLDS.items():
         value = iou(rle.decode(first["masks"][name]), rle.decode(second["masks"][name]))
         expected &= value >= threshold
         assert result.detail["masks"][name]["pairwise_iou"] == [[0, 1, round(float(value), 6)]]
@@ -469,15 +408,11 @@ def test_consensus_matches_a_plain_numpy_calculation(labels):
 
 
 @given(label_pairs())
-def test_agreement_does_not_depend_on_the_order_of_the_labels(labels):
-    forward = TASK.check_consensus(labels)
-    backward = TASK.check_consensus(labels[::-1])
+def test_agreement_is_symmetric_and_reflexive(task, labels):
+    forward = task.check_consensus(labels)
+    backward = task.check_consensus(labels[::-1])
     assert forward.agreed == backward.agreed
-    for name in ("lung", "effusion"):
+    for name in THRESHOLDS:
         assert forward.detail["masks"][name]["min_iou"] == backward.detail["masks"][name]["min_iou"]
-
-
-@given(label_pairs())
-def test_a_label_always_agrees_with_itself(labels):
-    assert TASK.check_consensus([labels[0], labels[0]]).agreed
-    assert TASK.score(labels[0], labels[0]).agreed
+    assert task.check_consensus([labels[0], labels[0]]).agreed
+    assert task.score(labels[0], labels[0]).agreed

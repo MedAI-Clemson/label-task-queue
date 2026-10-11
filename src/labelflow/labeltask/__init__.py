@@ -1,5 +1,6 @@
 """Label tasks: the ontology, validating labels, and the consensus check."""
 
+from labelflow.labeltask import rle
 from labelflow.labeltask.base import (
     ConsensusResult,
     Label,
@@ -27,4 +28,5 @@ __all__ = [
     "UnknownLabelTask",
     "load_ontology",
     "registry_from_directory",
+    "rle",
 ]

@@ -34,6 +34,7 @@ def test_example_ontology_loads(task):
     assert task.name == "image_ontology"
     assert task.version == 1
     assert task.ref == "image_ontology@1"
+    assert task.consensus_rule_version == "ontology-consensus@1"
     classifications = task.ontology.classifications
     assert [(c.name, c.values, c.required) for c in classifications] == [
         ("view", ("PA", "AP", "lateral"), True),
@@ -45,21 +46,14 @@ def test_example_ontology_loads(task):
     ]
 
 
-def test_load_from_path_text_and_file_name_string(example_dir):
+def test_load_from_a_path_a_file_name_or_yaml_text(example_dir, tmp_path):
     path = example_dir / "chest_xray.yaml"
     from_path = load_ontology(path)
     from_text = load_ontology(path.read_text())
     from_name = load_ontology(str(path))
     assert from_path.ontology == from_text.ontology == from_name.ontology
-
-
-def test_a_file_is_found_by_its_path(tmp_path):
     (tmp_path / "tiny.yaml").write_text(MINIMAL)
     assert load_ontology(tmp_path / "tiny.yaml").ref == "tiny@1"
-
-
-def test_consensus_rule_version_is_a_constant(task):
-    assert task.consensus_rule_version == "ontology-consensus@1"
 
 
 # --- Ontology version ---------------------------------------------------------------------
@@ -73,9 +67,19 @@ def test_ontology_version_is_name_version_and_a_hash_of_the_canonical_json(task,
     assert re.fullmatch(r"image_ontology@1\+[0-9a-f]{12}", task.ontology_version)
 
 
-def test_an_edit_without_a_version_bump_is_detectable():
+@pytest.mark.parametrize(
+    ("before", "after"),
+    [
+        pytest.param("[PA, AP]", "[PA, AP, lateral]", id="a-value-added"),
+        pytest.param("[PA, AP]", "[AP, PA]", id="values-reordered"),
+        pytest.param(
+            "version: 1\n", "version: 1\nmasks: [{name: lung, threshold: 0.8}]\n", id="a-mask-added"
+        ),
+    ],
+)
+def test_an_edit_without_a_version_bump_is_detectable(before, after):
     original = load_ontology(MINIMAL)
-    edited = load_ontology(MINIMAL.replace("[PA, AP]", "[PA, AP, lateral]"))
+    edited = load_ontology(MINIMAL.replace(before, after))
     assert edited.ref == original.ref
     assert edited.ontology_version != original.ontology_version
     assert edited.ontology_version.startswith("tiny@1+")
@@ -101,11 +105,6 @@ def test_layout_and_comments_do_not_change_the_version():
         load_ontology(textwrap.dedent(reordered)).ontology_version
         == load_ontology(MINIMAL).ontology_version
     )
-
-
-def test_the_order_of_values_is_part_of_the_ontology():
-    flipped = load_ontology(MINIMAL.replace("[PA, AP]", "[AP, PA]"))
-    assert flipped.ontology_version != load_ontology(MINIMAL).ontology_version
 
 
 # --- The registry -------------------------------------------------------------------------
@@ -258,6 +257,11 @@ BAD_FILES = [
         id="blank-value",
     ),
     pytest.param(
+        "name: tiny\nversion: 1\nclassifications:\n  - name: ' '\n    values: [PA]\n",
+        ["classification ' ': name must not be empty"],
+        id="blank-name",
+    ),
+    pytest.param(
         "name: tiny\nversion: 1\nclassifications:\n  - name: smoker\n    values: [yes, no]\n",
         [
             "classification 'smoker': item 1 of 'values' must be text. In YAML, put quotes around "
@@ -295,6 +299,11 @@ BAD_FILES = [
         "name: tiny\nversion: 1\nclassifications:\n  - view\n",
         ["Item 1 of 'classifications' must be a set of keys and values (such as name: lung)."],
         id="classification-is-not-a-mapping",
+    ),
+    pytest.param(
+        "name: tiny\nversion: 1\nclassifications: view\n",
+        ["'classifications' must be a list."],
+        id="classifications-is-not-a-list",
     ),
     pytest.param(
         "name: tiny\nversion: 1\nmasks:\n  - name: lung\n",

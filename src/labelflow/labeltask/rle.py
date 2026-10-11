@@ -29,7 +29,7 @@ from typing import Any
 
 import numpy as np
 
-from labelflow.labeltask._messages import describe_kind
+from labelflow.labeltask.base import describe_kind
 
 RLE = dict[str, Any]
 """A mask as ``{"size": [height, width], "counts": list or string}``."""
@@ -54,9 +54,7 @@ def counts_to_string(counts: Sequence[int]) -> str:
     """Write run lengths in the COCO compressed form (``rleToString``)."""
     characters = []
     for i, count in enumerate(counts):
-        number = count
-        if i > 2:
-            number -= counts[i - 2]
+        number = count - counts[i - 2] if i > 2 else count
         more = True
         while more:
             group = number & 0x1F  # the lowest 5 bits
@@ -70,7 +68,7 @@ def counts_to_string(counts: Sequence[int]) -> str:
 
 
 def counts_from_string(text: str) -> list[int]:
-    """Read run lengths from the COCO compressed form (``rleFrString``)."""
+    """Read run lengths from the COCO compressed form (``rleFrString``). Raises RLEError."""
     counts: list[int] = []
     position = 0
     while position < len(text):
@@ -111,7 +109,7 @@ def problems(rle: object) -> list[str]:
     The messages are phrases such as ``"'size' must be ..."``, meant to follow a lead-in like
     "Mask 'lung' is not a valid COCO RLE:".
     """
-    return _read(rle)[2]
+    return _check(rle)[0]
 
 
 def validate(rle: object) -> None:
@@ -120,62 +118,59 @@ def validate(rle: object) -> None:
         raise RLEError(found)
 
 
-def _read(rle: object) -> tuple[tuple[int, int] | None, list[int] | None, list[str]]:
-    """Return ``(size, run lengths, problems)``; size or run lengths are None if unreadable."""
+def _check(rle: object) -> tuple[list[str], tuple[int, int] | None, list[int] | None]:
+    """Return ``(problems, size, run lengths)``; size or run lengths are None if unreadable."""
     if not isinstance(rle, dict):
         kind = describe_kind(rle)
-        return None, None, [f"it must be an object with 'size' and 'counts', not {kind}"]
+        return [f"it must be an object with 'size' and 'counts', not {kind}"], None, None
     found = [
         f"unexpected key {key!r} (only 'size' and 'counts' are allowed)"
         for key in rle
         if key not in ("size", "counts")
     ]
-    size = _read_size(rle, found)
-    counts = _read_counts(rle, found)
-    if size is not None and counts is not None:
-        pixels = size[0] * size[1]
-        if sum(counts) != pixels:
-            found.append(
-                f"'counts' add up to {sum(counts)} pixels, but a {size[0]} x {size[1]} mask "
-                f"has {pixels}"
-            )
-    return size, counts, found
-
-
-def _read_size(rle: dict, found: list[str]) -> tuple[int, int] | None:
+    size = counts = None
     if "size" not in rle:
         found.append("it has no 'size' (give [height, width])")
-        return None
-    size = rle["size"]
-    if (
+    elif _is_size(rle["size"]):
+        size = (rle["size"][0], rle["size"][1])
+    else:
+        found.append(
+            "'size' must be two whole numbers [height, width], each at least 1, "
+            f"not {rle['size']!r}"
+        )
+    if "counts" not in rle:
+        found.append("it has no 'counts'")
+    else:
+        try:
+            counts = _read_counts(rle["counts"])
+        except RLEError as error:
+            found += error.problems
+    if size and counts is not None and sum(counts) != size[0] * size[1]:
+        found.append(
+            f"'counts' add up to {sum(counts)} pixels, but a {size[0]} x {size[1]} mask "
+            f"has {size[0] * size[1]}"
+        )
+    return found, size, counts
+
+
+def _is_size(size: object) -> bool:
+    return (
         isinstance(size, list | tuple)
         and len(size) == 2
         and all(_is_whole_number(side) and side >= 1 for side in size)
-    ):
-        return size[0], size[1]
-    found.append(f"'size' must be two whole numbers [height, width], each at least 1, not {size!r}")
-    return None
+    )
 
 
-def _read_counts(rle: dict, found: list[str]) -> list[int] | None:
-    if "counts" not in rle:
-        found.append("it has no 'counts'")
-        return None
-    counts = rle["counts"]
+def _read_counts(counts: object) -> list[int]:
+    """The run lengths from either form of ``counts``, or an RLEError saying what is wrong."""
     if isinstance(counts, str):
-        try:
-            return counts_from_string(counts)
-        except RLEError as error:
-            found.extend(error.problems)
-            return None
+        return counts_from_string(counts)
     if isinstance(counts, list | tuple):
         if all(_is_whole_number(count) and count >= 0 for count in counts):
             return list(counts)
-        found.append("'counts' must contain only whole numbers that are 0 or more")
-        return None
+        raise RLEError(["'counts' must contain only whole numbers that are 0 or more"])
     kind = describe_kind(counts)
-    found.append(f"'counts' must be a list of run lengths or a compressed string, not {kind}")
-    return None
+    raise RLEError([f"'counts' must be a list of run lengths or a compressed string, not {kind}"])
 
 
 def _is_whole_number(value: object) -> bool:
@@ -184,7 +179,7 @@ def _is_whole_number(value: object) -> bool:
 
 def _parse(rle: object) -> tuple[tuple[int, int], list[int]]:
     """Return the size and the run lengths of a valid mask, or raise RLEError."""
-    size, counts, found = _read(rle)
+    found, size, counts = _check(rle)
     if found or size is None or counts is None:
         raise RLEError(found)
     return size, counts

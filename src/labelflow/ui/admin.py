@@ -20,7 +20,7 @@ from fastapi.responses import Response
 from pydantic import ValidationError
 
 from labelflow.api.deps import AdminProject, AdminUser, RuntimeDep
-from labelflow.api.errors import ApiError, status_for
+from labelflow.api.errors import ApiError, Unprocessable, status_for
 from labelflow.api.media import CannotHash, content_hash
 from labelflow.api.routes.datasets import ItemIn
 from labelflow.engine import EngineError, NewItem, NotAllowed
@@ -305,16 +305,18 @@ def parse_items(text: str) -> list[dict[str, Any]]:
     any other column becomes a text property)."""
     text = text.strip()
     if not text:
-        raise ApiError("Paste the items to import, as JSON or CSV.")
+        raise Unprocessable("Paste the items to import, as JSON or CSV.")
     if text[0] in "[{":
         try:
             data = json.loads(text)
         except ValueError as error:
-            raise ApiError(f"The pasted text is not valid JSON: {error}.") from None
+            raise Unprocessable(f"The pasted text is not valid JSON: {error}.") from None
         if isinstance(data, dict):
             data = data.get("items")
         if not isinstance(data, list):
-            raise ApiError("The JSON must be a list of items, or an object with an `items` list.")
+            raise Unprocessable(
+                "The JSON must be a list of items, or an object with an `items` list."
+            )
         return [row if isinstance(row, dict) else {"item": row} for row in data]
     reader = csv.DictReader(io.StringIO(text))
     rows = []
@@ -335,7 +337,7 @@ def parse_items(text: str) -> list[dict[str, Any]]:
                     try:
                         properties.update(json.loads(value))
                     except ValueError:
-                        raise ApiError(
+                        raise Unprocessable(
                             f"The `properties` of item '{raw.get('item')}' are not valid JSON."
                         ) from None
             elif value:
@@ -343,7 +345,7 @@ def parse_items(text: str) -> list[dict[str, Any]]:
         row["properties"] = properties
         rows.append(row)
     if not rows:
-        raise ApiError("The CSV has no rows after its header (`item,uri[,content_hash]`).")
+        raise Unprocessable("The CSV has no rows after its header (`item,uri[,content_hash]`).")
     return rows
 
 
@@ -360,7 +362,7 @@ def import_items(
         rows = parse_items(items)
         most = getattr(runtime.settings, "max_import_items", 10_000)
         if len(rows) > most:
-            raise ApiError(f"Import at most {most} items at a time.")
+            raise Unprocessable(f"Import at most {most} items at a time.")
         problems: list[str] = []
         ready: list[NewItem] = []
         for number, row in enumerate(rows, start=1):
@@ -387,7 +389,7 @@ def import_items(
                 )
             )
         if problems:
-            raise ApiError(
+            raise Unprocessable(
                 f"No items were imported: {len(problems)} of {len(rows)} have problems.", problems
             )
         imported = ctx.engine.import_items(dataset, ready, ctx.actor)

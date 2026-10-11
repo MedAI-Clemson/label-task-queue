@@ -18,6 +18,7 @@ It checks that the submit body
 
 from __future__ import annotations
 
+import itertools
 import json
 import sys
 from pathlib import Path
@@ -66,7 +67,7 @@ def stroke(cx, cy, points, diameter) -> np.ndarray:
     if len(points) == 1:
         return disk(cx, cy, points[0][0], points[0][1], r)
     out = np.zeros(cx.shape, dtype=bool)
-    for (ax, ay), (bx, by) in zip(points, points[1:]):
+    for (ax, ay), (bx, by) in itertools.pairwise(points):
         out |= capsule(cx, cy, ax, ay, bx, by, r)
     return out
 
@@ -138,16 +139,32 @@ def main(path: str) -> int:
         try:
             task.validate(body["label"])
             check(True, f"{name} label validates against {task.ontology_version}")
-        except Exception as error:  # noqa: BLE001 - report every problem
+        except Exception as error:
             check(False, f"{name} label validates: {error}")
-    check(isinstance(submit["duration_ms"], int) and submit["duration_ms"] >= 0, f"duration_ms is {submit['duration_ms']}")
+    check(
+        isinstance(submit["duration_ms"], int) and submit["duration_ms"] >= 0,
+        f"duration_ms is {submit['duration_ms']}",
+    )
     # The shape of labelflow.engine.events.Shown (not imported: the engine package is being
     # edited in parallel; the label task package is enough for this check).
     shown = submit["shown"]
-    check(set(shown) == {"content_hash", "prior_label_ids", "show_prior", "consensus_rule_version"}, f"shown has exactly Shown's fields: {sorted(shown)}")
-    check(shown["show_prior"] is True and shown["prior_label_ids"] == [101], f"shown reports the prior label: {shown}")
-    check(shown["content_hash"].startswith("sha256:") and shown["consensus_rule_version"] == "ontology-consensus@1", "shown carries the packet's hash and rule version")
-    check(submit["label"]["classifications"] == {"view": "PA", "quality": "poor"}, f"classifications {submit['label']['classifications']}")
+    check(
+        set(shown) == {"content_hash", "prior_label_ids", "show_prior", "consensus_rule_version"},
+        f"shown has exactly Shown's fields: {sorted(shown)}",
+    )
+    check(
+        shown["show_prior"] is True and shown["prior_label_ids"] == [101],
+        f"shown reports the prior label: {shown}",
+    )
+    check(
+        shown["content_hash"].startswith("sha256:")
+        and shown["consensus_rule_version"] == "ontology-consensus@1",
+        "shown carries the packet's hash and rule version",
+    )
+    check(
+        submit["label"]["classifications"] == {"view": "PA", "quality": "poor"},
+        f"classifications {submit['label']['classifications']}",
+    )
 
     masks = {name: rle.decode(m) for name, m in submit["label"]["masks"].items()}
     for name, m in submit["label"]["masks"].items():
@@ -161,25 +178,46 @@ def main(path: str) -> int:
     expected = replay(ops, list(masks), height, width)
     for name in masks:
         differing = int(np.count_nonzero(masks[name] != expected[name]))
-        check(differing == 0, f"{name}: browser pixels == numpy replay of {len(ops)} ops ({differing} differ; area {int(masks[name].sum())})")
+        check(
+            differing == 0,
+            f"{name}: browser pixels == numpy replay of {len(ops)} ops "
+            f"({differing} differ; area {int(masks[name].sum())})",
+        )
 
     # The known shapes, independently of the replay.
     strokes = [op for op in ops if op["kind"] == "stroke" and not op["erase"]]
     dot = strokes[0]
     cx, cy = centers(height, width)
     dot_pixels = disk(cx, cy, dot["points"][0][0], dot["points"][0][1], dot["diameter"] / 2)
-    check(dot["points"] == [[100.5, 100.5]] and dot["diameter"] == 11, f"first op is the brush dot at {dot['points']} (pixel center under the click) d={dot['diameter']}")
-    check(int(dot_pixels.sum()) == 97 and masks["lung"][dot_pixels].all(), f"brush dot covers its {int(dot_pixels.sum())} centers (expected 97)")
-    rect = [op for op in ops if op["kind"] == "polygon" and len(op["vertices"]) == 4 and not op["erase"]][0]
+    check(
+        dot["points"] == [[100.5, 100.5]] and dot["diameter"] == 11,
+        f"first op is the brush dot at {dot['points']} "
+        f"(pixel center under the click) d={dot['diameter']}",
+    )
+    check(
+        int(dot_pixels.sum()) == 97 and masks["lung"][dot_pixels].all(),
+        f"brush dot covers its {int(dot_pixels.sum())} centers (expected 97)",
+    )
+    rect = next(
+        op for op in ops if op["kind"] == "polygon" and len(op["vertices"]) == 4 and not op["erase"]
+    )
     rect_pixels = polygon(cx, cy, rect["vertices"])
-    check(int(rect_pixels.sum()) == 4000, f"rectangle polygon rasterizes to {int(rect_pixels.sum())} px (expected 4000)")
-    erase = [op for op in ops if op["kind"] == "polygon" and op["erase"]][0]
+    check(
+        int(rect_pixels.sum()) == 4000,
+        f"rectangle polygon rasterizes to {int(rect_pixels.sum())} px (expected 4000)",
+    )
+    erase = next(op for op in ops if op["kind"] == "polygon" and op["erase"])
     hole = polygon(cx, cy, erase["vertices"])
-    check(int(hole.sum()) == 400 and not masks["lung"][hole].any(), "polygon erase removed its 400 px")
+    check(
+        int(hole.sum()) == 400 and not masks["lung"][hole].any(), "polygon erase removed its 400 px"
+    )
     check(masks["lung"][rect_pixels & ~hole].all(), "rectangle minus the hole is all foreground")
-    triangle = [op for op in ops if op["kind"] == "polygon" and len(op["vertices"]) == 3][0]
+    triangle = next(op for op in ops if op["kind"] == "polygon" and len(op["vertices"]) == 3)
     tri_pixels = polygon(cx, cy, triangle["vertices"])
-    check(np.array_equal(masks["effusion"], tri_pixels), f"effusion is exactly the triangle ({int(tri_pixels.sum())} px)")
+    check(
+        np.array_equal(masks["effusion"], tri_pixels),
+        f"effusion is exactly the triangle ({int(tri_pixels.sum())} px)",
+    )
 
     print(f"timings reported by the page: {export.get('timings')}")
     if failures:

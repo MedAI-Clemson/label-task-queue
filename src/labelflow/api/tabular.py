@@ -36,6 +36,7 @@ LABEL_COLUMNS: dict[str, str] = {
     "slot": "integer",
     "labeler": "text",
     "roles": "text",
+    "roles_at_claim": "text",
     "config_version": "integer",
     "label_task": "text",
     "ontology_version": "text",

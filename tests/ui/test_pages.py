@@ -96,13 +96,20 @@ def test_home_shows_a_held_slot(ana, workflow, expect):
 # --- the labeler's workflow page and asking for work -------------------------------------------
 
 
-def test_the_workflow_page(ana, dr_smith, new_person, workflow, expect):
+def test_the_workflow_page(ana, dr_smith, new_person, app, workflow, expect):
     page = expect(ana.get("/ui/projects/xray/workflows/xray_main"))
     assert "<h1>Workflow xray_main</h1>" in page
     assert "annotator" in page and "yours" in page
     assert "3 open slots you could claim now" in page
     assert dr_smith.get("/ui/projects/xray/workflows/xray_main").status_code == 200
-    response = new_person("stranger").get("/ui/projects/xray/workflows/xray_main")
+    # a stranger to the project is told there is no such project; someone in the project
+    # but without a role in the workflow is told so
+    stranger = new_person("stranger")
+    assert stranger.get("/ui/projects/xray/workflows/xray_main").status_code == 404
+    engine = app.state.runtime.engine_for("xray")
+    engine.define_role("trainee", "root")
+    engine.grant_role("stranger", "trainee", "root", "test")
+    response = stranger.get("/ui/projects/xray/workflows/xray_main")
     assert response.status_code == 403
     assert "You do not hold a role in this workflow." in response.text
     assert ana.get("/ui/projects/xray/workflows/nope").status_code == 404
@@ -176,7 +183,7 @@ def test_images_outside_the_media_folder_and_on_the_web(app, ana, workflow, tmp_
     location = f"/ui/projects/xray/workflows/xray_main/slots/{slots['escape']}"
     response = ana.get(location + "/image")
     assert response.status_code == 403
-    assert "outside the server's media folder" in response.text
+    assert "outside the server&#39;s media folder" in response.text
     engine.release("xray_main", slots["escape"], "ana", "cannot be shown")
     engine.claim("xray_main", slots["web"], "ana")
     location = f"/ui/projects/xray/workflows/xray_main/slots/{slots['web']}"

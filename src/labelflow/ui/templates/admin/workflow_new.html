@@ -11,7 +11,7 @@
     <label for="config">Config (YAML)</label>
     <textarea id="config" name="config" rows="22" spellcheck="false" required
       hx-post="{{ root }}/admin/projects/{{ project }}/workflows/validate"
-      hx-trigger="load, keyup changed delay:500ms"
+      hx-trigger="load, input changed delay:500ms"
       hx-include="closest form"
       hx-target="#validation">{{ config }}</textarea>
     <label for="seed">Seed <span class="muted">(optional: a whole number that fixes every random draw)</span></label>

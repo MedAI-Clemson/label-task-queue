@@ -20,7 +20,7 @@ usually a small, local change.
 | 4 | Storage | Done (SQLite only) | `src/labelflow/store/`, `alembic.ini` |
 | 5 | Versioning and edits | Done | `src/labelflow/engine/edits.py` |
 | 6 | API | Done (Docker image not built in CI) | `src/labelflow/api/` |
-| 7 | Interface | Not started; unblocked by 0b | |
+| 7 | Interface | Done; browser-tested end to end (see [`ui/README.md`](ui/README.md)) | `src/labelflow/ui/` |
 | 8 | Pilot | Not started | |
 
 **The prototype tag.** The prototype was removed on the Phase 1 branch. Its last commit
@@ -193,6 +193,11 @@ A read-only review of the first merge found these, all now fixed:
 ## Known follow-ups
 
 - Login rate limiting and account reactivation.
+- The interface's `shown` reports every earlier-label layer the work packet offered, not
+  which layers the reviewer actually toggled on. Decide whether toggles should be logged.
+- Mermaid diagrams load from a CDN in the admin pages (vendoring it is about 3 MB).
+- The home page's "work waiting" count reads engine internals; it should get an engine
+  read method.
 - Locating config problems by YAML line number. Today they are located by stage and key.
 
 ## The design notes' open questions, answered in review (Oct 11, 2026)

@@ -71,9 +71,7 @@ def test_a_batch_with_too_many_items_is_refused(app_with, make_items, expect):
     expect(root.post("/projects/xray/datasets/d/items", {"items": make_items(2)}), 201)
 
 
-def test_an_item_with_properties_too_large_is_a_problem_of_the_batch(
-    app_with, make_items, expect
-):
+def test_an_item_with_properties_too_large_is_a_problem_of_the_batch(app_with, make_items, expect):
     root, _ = app_with(max_properties_bytes=64)
     expect(root.post("/projects", {"name": "xray"}), 201)
     expect(root.post("/projects/xray/datasets", {"name": "d"}), 201)

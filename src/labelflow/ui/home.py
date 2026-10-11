@@ -69,7 +69,7 @@ def _row(workflow: Workflow, my_roles: set[str], waiting: int, held: int | None)
 
 @router.get("/")
 def home(request: Request, user: User, runtime: RuntimeDep) -> Response:
-    held = runtime.projects.roles_of(user.user_id)
+    held = runtime.roles_of(user.user_id)
     projects = []
     for project in runtime.projects.list_all():
         if not user.is_admin and project.name not in held:

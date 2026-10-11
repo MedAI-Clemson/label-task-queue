@@ -15,6 +15,7 @@ not allowed in the current state (already excluded...)  409
 a claim while paused; pausing or resuming twice         409
 not eligible; slot not claimed by you                   403
 refused edit; invalid label; malformed request          422
+a broken event chain                                    500
 ======================================================  ======
 """
 
@@ -39,6 +40,7 @@ from labelflow.engine import (
     InvalidLabel,
     InvalidRequest,
     InvalidShown,
+    LabelTaskFailed,
     NotAllowed,
     NotEligible,
     NotFound,
@@ -116,6 +118,7 @@ _STATUS: dict[type[Exception], int] = {
     InvalidLabel: 422,
     InvalidShown: 422,
     BrokenChain: 500,
+    LabelTaskFailed: 422,  # the label task could not handle the label
     EngineError: 422,
 }
 
@@ -144,8 +147,11 @@ def _reply(status: int, detail: str, problems: Sequence[str] = ()) -> JSONRespon
 
 def _engine_error(request: Request, error: Exception) -> JSONResponse:
     assert isinstance(error, EngineError)
+    status = status_for(error)
+    if status >= 500:
+        log.exception("Engine error", exc_info=error)
     detail = str(error) if is_admin(request) else _HINT.sub("", str(error))
-    return _reply(status_for(error), detail, getattr(error, "problems", ()))
+    return _reply(status, detail, getattr(error, "problems", ()))
 
 
 def _api_error(_: Request, error: Exception) -> JSONResponse:

@@ -271,7 +271,9 @@ def test_a_labeler_without_a_role_in_the_workflow_may_not_see_it(admin, ana, pro
     assert response.json()["detail"] == "You do not hold a role in this workflow."
 
 
-def test_a_stranger_to_the_project_finds_neither_it_nor_its_workflows(new_person, workflow, project):
+def test_a_stranger_to_the_project_finds_neither_it_nor_its_workflows(
+    new_person, workflow, project
+):
     stranger = new_person("stranger")
     for response in (stranger.get(f"{project}/workflows"), stranger.get(workflow)):
         assert response.status_code == 404

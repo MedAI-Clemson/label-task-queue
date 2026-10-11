@@ -157,7 +157,7 @@ class Browser:
     def csrf(self) -> str:
         if self._csrf is None:
             page = self.get("/ui/")
-            found = re.search(r'name="csrf" value="([0-9a-f]+)"', page.text)
+            found = re.search(r'name="csrf-token" content="([0-9a-f]+)"', page.text)
             self._csrf = found.group(1) if found else ""
         return self._csrf
 
@@ -277,3 +277,14 @@ def simple_label() -> Callable[..., dict[str, Any]]:
 @pytest.fixture
 def blind_config() -> str:
     return BLIND_REVIEW
+
+
+@pytest.fixture
+def review_config() -> str:
+    return REVIEW_SAMPLE
+
+
+@pytest.fixture
+def seed() -> int:
+    """The seed under which img_001 is sampled for expert review."""
+    return SEED

@@ -31,6 +31,7 @@ EXPECTED = {
     "VersionConflict": 409,
     "NotAllowed": 409,
     "Paused": 409,
+    "OntologyChanged": 409,
     "NotEligible": 403,
     "SlotNotYours": 403,
     "EditRefused": 422,
@@ -38,6 +39,7 @@ EXPECTED = {
     "InvalidLabel": 422,
     "InvalidShown": 422,
     "BrokenChain": 500,
+    "LabelTaskFailed": 422,
     "EngineError": 422,
 }
 

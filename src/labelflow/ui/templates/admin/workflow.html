@@ -112,7 +112,7 @@
       <label for="edit-config">New config (YAML)</label>
       <textarea id="edit-config" name="config" rows="18" spellcheck="false" required
         hx-post="{{ base }}/preview-edit"
-        hx-trigger="keyup changed delay:600ms"
+        hx-trigger="input changed delay:600ms"
         hx-include="closest form"
         hx-target="#preview">{{ edit_config if edit_config is defined else resolved }}</textarea>
       <label for="edit-reason">Reason</label>

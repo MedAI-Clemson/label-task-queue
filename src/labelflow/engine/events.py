@@ -45,6 +45,14 @@ class Shown(_Frozen):
     consensus_rule_version: str | None = Field(
         None, description="The consensus rule version behind any agree/disagree flags shown."
     )
+    # Left out of the event's JSON when None, so events logged before the field existed
+    # keep their hashes (see ``event_hash``).
+    started_from: int | None = Field(
+        None,
+        exclude_if=lambda value: value is None,
+        description="The earlier label whose masks and classifications the labeler copied "
+        "into the editor to start from (one of `prior_label_ids`), if any.",
+    )
 
 
 class NewSlot(_Frozen):

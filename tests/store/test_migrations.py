@@ -161,7 +161,7 @@ def columns_of(engine: sa.Engine, table: str) -> set[str]:
 
 
 def test_upgrading_keeps_an_existing_project(config, url, build_engine, script):
-    """A project made before revisions 0002 to 0004 comes through the upgrade untouched.
+    """A project made before revisions 0002 to 0005 comes through the upgrade untouched.
 
     The store needs every table of the current schema, so the project is made at the head
     revision without pausing anything, and the database is taken back to 0001 (which drops
@@ -179,7 +179,7 @@ def test_upgrading_keeps_an_existing_project(config, url, build_engine, script):
         assert not tables & {"accounts", "sessions", "projects", "workflow_pauses", "stage_pauses"}
         assert "events" in tables
         assert "claimed_roles" not in columns_of(engine, "slots")
-        assert "roles_at_claim" not in columns_of(engine, "labels")
+        assert not {"roles_at_claim", "started_from"} & columns_of(engine, "labels")
         engine.dispose()
         command.upgrade(config, "head")
         store = SqlStore(engine, "demo")
@@ -240,6 +240,34 @@ def test_the_roles_at_claim_migration_fills_the_new_columns_from_the_log(
         command.upgrade(config, "0004")
         assert {"claimed_roles"} <= columns_of(engine, "slots")
         assert {"roles_at_claim"} <= columns_of(engine, "labels")
+        engine.dispose()
+        command.upgrade(config, "head")  # the store needs every column of the schema
+        store = SqlStore(engine, "demo")
+        assert store.snapshot() == before
+        assert store.verify_derived().identical
+    finally:
+        engine.dispose()
+
+
+def test_the_started_from_migration_fills_the_new_column_from_the_log(
+    config, url, build_engine, script
+):
+    """Revision 0005 adds ``labels.started_from`` and fills it from the ``label_submitted``
+    events, exactly as a replay would."""
+    command.upgrade(config, "head")
+    engine = connect(url)
+    try:
+        store = SqlStore(engine, "demo")
+        script(build_engine(store))
+        before = store.snapshot()
+        started = [(r["stage"], r["started_from"]) for r in before["labels"] if r["started_from"]]
+        assert len(started) == 1 and started[0][0] == "adjudicate"
+        engine.dispose()
+        command.downgrade(config, "0004")
+        assert "started_from" not in columns_of(engine, "labels")
+        engine.dispose()
+        command.upgrade(config, "0005")
+        assert "started_from" in columns_of(engine, "labels")
         store = SqlStore(engine, "demo")
         assert store.snapshot() == before
         assert store.verify_derived().identical

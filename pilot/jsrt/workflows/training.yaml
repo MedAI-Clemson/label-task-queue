@@ -1,0 +1,27 @@
+# JSRT pilot, workflow 1 of 2: the training round.
+#
+# Every trainee labels every image of a small gold set (20 images, chosen by
+# setup_pilot.py with a seeded, nodule-stratified draw), and each label is scored against
+# the image's 'gold_key': the SCR first observer's five masks plus the JSRT nodule answer.
+# The score report then gives each trainee's fraction of labels that agree with the key
+# under the ontology's thresholds; the labels export holds every label for a closer look.
+#
+# Start it only after the trainees hold the 'trainee' role: 'labels_per_item: all' means
+# everyone holding the role *when the image is admitted*, and every image is admitted at
+# the start. setup_pilot.py refuses to start it while nobody holds the role.
+
+workflow: jsrt_training_1
+dataset: jsrt_gold                # 20 images, each with a 'gold_key' property
+label_task: jsrt_scr@1            # pilot/jsrt/ontology/jsrt_scr.yaml
+
+stages:
+  - name: gold_read
+    assign_to: trainee
+    labels_per_item: all          # every trainee labels every gold image; the list of
+                                  # trainees is logged at admission
+    score_against: gold_key       # each label against the key, by the same consensus rule;
+                                  # changes no routing, and trainees never see the key
+    show_prior: false             # nothing earlier to show in a one-stage workflow; written
+                                  # out so the export states plainly that reads were blind
+
+final: none                       # training produces scores, not final labels

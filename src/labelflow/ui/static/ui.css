@@ -78,6 +78,10 @@ main.label-page { flex: 1; min-height: 0; display: grid; grid-template-columns: 
 #panel h2:first-child { margin-top: 0; }
 .swatch { display: inline-block; width: 12px; height: 12px; border-radius: 2px; vertical-align: -1px; margin: 0 2px; }
 .area { color: var(--muted); font-size: 0.85em; margin-left: 6px; }
+#layers li.layer-head { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; justify-content: space-between; margin-top: 6px; font-weight: 600; }
+#layers li.layer-head button { padding: 2px 8px; font-size: 0.85em; font-weight: normal; }
+#layers li.layer-class { padding-left: 12px; }
+#started-from { margin: 6px 0; padding: 4px 8px; border-left: 3px solid var(--accent); background: #f3f4f7; }
 #flags li.agree { color: var(--ok); }
 #flags li.disagree { color: var(--bad); }
 #status { grid-column: 1 / 3; padding: 4px 12px; background: #fff; border-top: 1px solid var(--line); color: var(--muted); font-size: 0.9em; }

@@ -85,19 +85,24 @@ def make_engine(
     return engine
 
 
-def work(engine: Engine, workflow: str, user: str, value: str) -> int | None:
-    """Ask for work as ``user`` and submit ``{"value": value}``; the slot, or None."""
+def work(engine: Engine, workflow: str, user: str, value: str, start: bool = False) -> int | None:
+    """Ask for work as ``user`` and submit ``{"value": value}``; the slot, or None. With
+    ``start``, the label starts from the first earlier label shown."""
     slot = engine.request_work(workflow, user)
     if slot is None:
         return None
     packet = engine.work_packet(workflow, slot.slot, user)
-    engine.submit(workflow, slot.slot, user, {"value": value}, packet.shown())
+    shown = packet.shown()
+    if start:
+        shown = shown.model_copy(update={"started_from": shown.prior_label_ids[0]})
+    engine.submit(workflow, slot.slot, user, {"value": value}, shown)
     return slot.slot
 
 
 def run_script(engine: Engine, workflow: str = "wf", pauses: bool = True) -> None:
     """Commands that touch most tables: a claim is released, an item is excluded, two
-    labelers disagree on some items and an expert adjudicates one. With ``pauses``, the
+    labelers disagree on some items and an expert adjudicates one, starting from the first
+    annotation (``labels.started_from``). With ``pauses``, the
     workflow and a stage are paused and resumed on the way (filling the pause tables)."""
     slot = engine.request_work(workflow, "ana")
     engine.release(workflow, slot.slot, "ana", "changed my mind")
@@ -110,7 +115,7 @@ def run_script(engine: Engine, workflow: str = "wf", pauses: bool = True) -> Non
     for value in ("cat", "dog", "cat"):
         work(engine, workflow, "ana", value)
         work(engine, workflow, "ben", "cat")
-    work(engine, workflow, "dr_smith", "dog")
+    work(engine, workflow, "dr_smith", "dog", start=True)
     engine.grant_role("cy", "annotator", "admin", "hired")
     engine.revoke_role("cy", "annotator", "admin", "left")
 

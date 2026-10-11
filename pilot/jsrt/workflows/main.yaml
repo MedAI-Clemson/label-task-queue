@@ -1,0 +1,59 @@
+# JSRT pilot, workflow 2 of 2: the main labeling run over the other images (about 227).
+#
+# The anchor project's shape, plus a double-read subset:
+#
+# - Annotators label each image once; a random 20% get a second, independent read. Those
+#   pairs are the only place two people label the same image, so they measure
+#   annotator-annotator agreement and exercise the consensus check, the '.disagreed'
+#   output and the agreed label, which the audit checklist asks about.
+# - An expert adjudicates the double reads that disagreed, seeing both reads with the
+#   per-structure flags.
+# - An expert also reviews a random 10% of all annotated images, blind.
+#
+# Every image here also has a 'gold_key' (SCR observer 1), so every stage is scored against
+# it: that measures annotator and expert quality on every label, not only on the sample.
+#
+# Staffing: 'adjudicate' and 'expert_review' can hold the same image at once (a disputed
+# double read that is also drawn for review, about 1 to 2% of images), and nobody labels an
+# image twice, so such an image needs two different experts. With one expert the validator
+# warns about this, and those few images wait (explain() says why). Give the 'expert' role
+# to two people, or remove the 'expert_review' stage before starting.
+
+workflow: jsrt_main
+dataset: jsrt_main                # every image not in the gold set
+label_task: jsrt_scr@1
+
+stages:
+  - name: annotate
+    assign_to: annotator
+    labels_per_item: {count: 2, fraction: 0.2}  # 20% of images, by hashed draw, get two
+                                  # reads by different annotators; the rest get one
+    score_against: gold_key       # every annotation is scored against SCR observer 1
+    # show_prior is irrelevant here: nothing comes before this stage
+
+  - name: adjudicate
+    input: annotate.disagreed     # only double reads can disagree (any structure below its
+                                  # IoU threshold, or a different nodule answer)
+    assign_to: expert
+    score_against: gold_key
+    show_prior: true              # the expert sees both reads as layers with the per-field
+                                  # flags: that is the point of adjudication. The expert's
+                                  # label is a complete new label, agreed parts included.
+
+  - name: expert_review
+    input: annotate               # every annotated image is a candidate...
+    sample: 0.1                   # ...10% by hashed draw (about 23 images)
+    assign_to: expert
+    score_against: gold_key
+    show_prior: false             # blind: the expert does not see the annotation, so the
+                                  # review is an independent read. The interface has no
+                                  # "start from this layer", so a reviewer redraws every
+                                  # structure either way; blind keeps it unanchored and makes
+                                  # expert-vs-annotator and expert-vs-gold comparisons clean.
+
+final: [adjudicate, expert_review, annotate]
+# The first listed stage that labeled an image supplies its final label:
+# - a disputed double read: the adjudicator's label;
+# - otherwise a reviewed image: the expert's blind label;
+# - otherwise: the annotation (or, for an agreed double read, the agreed label, which is a
+#   copy of the earlier of the two).

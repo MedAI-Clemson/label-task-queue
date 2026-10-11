@@ -38,7 +38,9 @@ class SubmitIn(BaseModel):
         description="The label, in the shape the workflow's label task asks for."
     )
     shown: Shown = Field(
-        description="What you showed the labeler, as references (see the `shown` of the work)."
+        description="What you showed the labeler, as references (see the `shown` of the work). "
+        "If the labeler copied one earlier label into the editor to start from, give its id "
+        "as `started_from`; it must be one of `prior_label_ids`."
     )
     duration_ms: int | None = Field(
         default=None, ge=0, description="Milliseconds from claim to submit, as you measured it."
@@ -118,7 +120,9 @@ def submit_label(
 ) -> SubmitOut:
     """Submit the label for a slot you hold, with the references to what you showed. A label
     that does not fit the label task is rejected with every problem; so is a `shown` that
-    does not match the work packet. Nothing is recorded then, and you still hold the slot."""
+    does not match the work packet, including a `started_from` that is not one of the earlier
+    labels reported as shown (a blind stage shows none). Nothing is recorded then, and you
+    still hold the slot."""
     check_size(body.label, runtime.settings.max_label_bytes, "The label")
     label_id = ctx.engine.submit(
         workflow, slot, ctx.actor, body.label, body.shown, body.duration_ms

@@ -4,7 +4,9 @@ The labeling page embeds the work (slot, packet and ``shown``) and the ontology 
 hands them to ``static/label.js``, which draws the image, the earlier labels as layers and
 the masks being edited. Submitting is a JSON post from the page to the API's own submit
 endpoint, with the packet's ``shown`` reported as given: the page offers every earlier
-label of the packet as a layer, and a blind stage has none.
+label of the packet as a layer, and a blind stage has none. The one addition is
+``started_from``, set when the reviewer copies an earlier label into the editor ("Start from
+this layer").
 
 The image route serves ``file://`` images and paths inside ``LABELFLOW_MEDIA_ROOT``, and only
 to the person who holds the slot. Images at an ``http(s)`` address are loaded by the browser

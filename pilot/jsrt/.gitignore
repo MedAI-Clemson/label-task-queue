@@ -1,0 +1,6 @@
+# Data and outputs stay out of the repository: the JSRT images may not be redistributed.
+data/
+out/
+*.IMG
+*.img
+pilot_credentials.csv

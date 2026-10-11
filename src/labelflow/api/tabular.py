@@ -47,6 +47,8 @@ LABEL_COLUMNS: dict[str, str] = {
     "shown_prior_ids": "text",
     "show_prior": "boolean",
     "shown_consensus_rule": "text",
+    "started_from": "integer",
+    "changed_from_start": "text",
     "score_against": "text",
     "score_key_status": "text",
     "score_agreed": "boolean",

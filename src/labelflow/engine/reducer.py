@@ -235,6 +235,7 @@ def _label_submitted(tables: Tables, e: ev.LabelSubmitted) -> None:
             "shown_prior_ids": list(e.shown.prior_label_ids),
             "show_prior": e.shown.show_prior,
             "shown_consensus_rule": e.shown.consensus_rule_version,
+            "started_from": e.shown.started_from,
             "label_task": e.label_task,
             "ontology_version": e.ontology_version,
             "duration_ms": e.duration_ms,

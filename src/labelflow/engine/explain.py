@@ -290,9 +290,11 @@ def _summary(e: Event) -> str:
             return f"slot {e.slot} of {e.stage} by {e.user}"
         case ev.LabelSubmitted():
             took = f" ({_duration(e.duration_ms)})" if e.duration_ms is not None else ""
+            start = e.shown.started_from
+            started = f"; {e.user} started from label {start}" if start is not None else ""
             return (
                 f"label {e.label_id} by {e.user} ({', '.join(e.roles)}) in {e.stage}: "
-                f"{_short(canonical_json(e.label))}{took}"
+                f"{_short(canonical_json(e.label))}{took}{started}"
             )
         case ev.LabelScored():
             verdict = {

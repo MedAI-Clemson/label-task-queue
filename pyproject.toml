@@ -35,6 +35,9 @@ dev = [
 # 1.48 matches the Chromium build in ~/.cache/ms-playwright (chromium-1140); run
 # `playwright install chromium` to download one.
 browser = ["playwright==1.48.0"]
+# The JSRT pilot kit (pilot/jsrt/prepare.py) reads mask images and writes PNGs with Pillow;
+# tests/pilot is skipped without it.
+pilot = ["pillow==12.3.0"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/labelflow"]

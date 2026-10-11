@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import json
 from concurrent.futures import ThreadPoolExecutor
 
@@ -339,6 +340,79 @@ def test_show_prior_must_be_reported_as_the_packet_gave_it(
     )
     assert response.status_code == 422
     assert response.json()["detail"].endswith("Report exactly what the work packet gave.")
+
+
+def test_a_reviewer_may_start_from_an_earlier_label(
+    admin, project, ana, dr_smith, label_with, expect
+):
+    expect(admin.post(f"{project}/workflows", {"config": REVIEW_CHECKED}), 201)
+    flow = f"{project}/workflows/checked"
+    label_with(ana, flow, "cat")
+    work = expect(dr_smith.post(f"{flow}/next"))
+    assert "started_from" not in work["shown"]  # the packet gives no start: the labeler picks
+    (prior,) = work["shown"]["prior_label_ids"]
+    shown = work["shown"] | {"started_from": prior}
+    body = {"label": {"value": "dog"}, "shown": shown}
+    label_id = expect(dr_smith.post(f"{flow}/slots/{work['slot']['slot']}/submit", body), 201)
+    events = expect(admin.get(f"{project}/events?type=label_submitted&workflow=checked"))
+    event = next(e for e in events["rows"] if e["label_id"] == label_id["label_id"])
+    assert event["shown"]["started_from"] == prior
+    assert all("started_from" not in e["shown"] for e in events["rows"] if e != event)
+    lines = admin.get(f"{flow}/exports/labels").text.splitlines()
+    header = lines[0].split(",")
+    assert {"started_from", "changed_from_start"} <= set(header)
+    review = dict(zip(header, next(csv_row for csv_row in csv.reader(lines[2:3])), strict=True))
+    assert review["started_from"] == str(prior)
+    assert json.loads(review["changed_from_start"])["detail"] == {"values": ["cat", "dog"]}
+    explanation = expect(admin.get(f"{flow}/items/{work['slot']['item']}/explain"))
+    assert f"dr_smith started from label {prior}" in explanation["text"]
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        (
+            {"started_from": 999},
+            "The label reports starting from label 999, but label 999 is not among the earlier "
+            "labels reported as shown",
+        ),
+        (
+            {"started_from": "first"},
+            "shown.started_from: Input should be a valid integer",
+        ),
+    ],
+)
+def test_a_start_that_was_not_shown_is_refused(
+    admin, project, ana, dr_smith, label_with, expect, change, message
+):
+    expect(admin.post(f"{project}/workflows", {"config": REVIEW_CHECKED}), 201)
+    flow = f"{project}/workflows/checked"
+    label_with(ana, flow, "cat")
+    work = expect(dr_smith.post(f"{flow}/next"))
+    body = {"label": {"value": "dog"}, "shown": work["shown"] | change}
+    response = dr_smith.post(f"{flow}/slots/{work['slot']['slot']}/submit", body)
+    assert response.status_code == 422
+    assert message in json.dumps(response.json())
+    again = expect(dr_smith.get(f"{flow}/slots/{work['slot']['slot']}"))
+    assert again["slot"]["status"] == "claimed"  # nothing recorded; still held
+
+
+def test_a_blind_stage_cannot_start_from_an_earlier_label(
+    admin, project, ana, dr_smith, label_with, expect
+):
+    blind = json.loads(json.dumps(REVIEW_CHECKED))
+    blind["stages"][1]["show_prior"] = False
+    expect(admin.post(f"{project}/workflows", {"config": blind}), 201)
+    flow = f"{project}/workflows/checked"
+    first = label_with(ana, flow, "cat")
+    work = expect(dr_smith.post(f"{flow}/next"))
+    assert work["shown"]["show_prior"] is False and work["shown"]["prior_label_ids"] == []
+    events = expect(admin.get(f"{project}/events?type=label_submitted&workflow=checked"))
+    earlier = next(e["label_id"] for e in events["rows"] if e["slot"] == first["slot"]["slot"])
+    body = {"label": {"value": "dog"}, "shown": work["shown"] | {"started_from": earlier}}
+    response = dr_smith.post(f"{flow}/slots/{work['slot']['slot']}/submit", body)
+    assert response.status_code == 422
+    assert "stage expert_review is blind" in response.json()["detail"]
 
 
 def test_later_stages_are_offered_first(admin, project, ana, ben, label_with, expect):

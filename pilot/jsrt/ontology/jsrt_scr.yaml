@@ -1,0 +1,76 @@
+# The JSRT pilot's label task: the five structures of the SCR database (Segmentation in
+# Chest Radiographs; van Ginneken, Stegmann and Loog, Medical Image Analysis 10(1):19-40,
+# 2006) drawn on JSRT radiographs, plus one yes/no question about a nodule. Workflows
+# refer to it as 'jsrt_scr@1'. Change the version if you change anything below.
+#
+# Images are shown at 1024 x 1024, the grid of the SCR segmentations (prepare.py
+# downsamples the 2048 x 2048 JSRT images 2 x 2), so every mask is 1024 x 1024.
+
+name: jsrt_scr
+version: 1
+
+# The label is kept small on purpose: everything here must be drawn or answered on every
+# image, and two labels agree only when every field agrees.
+#
+# 'nodule' is the one fact of the JSRT clinical data a reader can judge from the image,
+# and the reason the database exists. It costs one click. It is compared exactly, so a
+# double read with different answers goes to adjudication even when the masks agree.
+#
+# Left out of the label, and kept as plain item properties instead (prepare.py), so they
+# can be joined to the exports for analysis without asking anyone to guess them:
+# - malignant/benign and the diagnosis: established by CT or pathology, not on the film;
+# - subtlety (1 extremely subtle .. 5 obvious): a property of the case, rated by the
+#   JSRT's own readers; useful to break detection down by difficulty, not to label;
+# - nodule size and position: the JSRT gives a centre and a diameter, not an outline,
+#   so there is no gold mask to score a nodule mask against, and this ontology has no
+#   point tool. A nodule mask class can come in a later version if the pilot wants one;
+# - age and sex: not image findings.
+classifications:
+  - name: nodule
+    values: [present, absent]
+    required: true
+
+# Thresholds: the IoU (intersection over union) at or above which two masks agree.
+#
+# The SCR paper reports how well its second observer matched the first (the reference
+# standard) over all 247 images, with the overlap Omega = TP / (TP + FP + FN): this is
+# already the IoU (Jaccard), so no conversion is needed. (For a Dice score D, the IoU is
+# D / (2 - D); the paper reports no Dice.) Its tables give, for the human observer:
+#
+#   structure   mean +- sd       Q1     median   min
+#   lungs       0.946 +- 0.018   0.939  0.949    0.822
+#   heart       0.878 +- 0.054   0.843  0.888    0.571
+#   clavicles   0.896 +- 0.037   0.880  0.905    0.707
+#
+# (lungs and clavicles averaged over left and right; computed on 256 x 256 images.)
+#
+# Each threshold sits a bit below human-human agreement, near the mean minus 1.65 sd,
+# so that about 95% of pairs of careful human reads would pass and a pass still means
+# "as close as two trained people get". Rounded down, which also allows for drawing with
+# a brush or polygon in a browser instead of the SCR authors' contour tool:
+#
+#   lungs      0.946 - 1.65 x 0.018 = 0.916  ->  0.90   (Dice 0.947)
+#   heart      0.878 - 1.65 x 0.054 = 0.789  ->  0.78   (Dice 0.876)
+#   clavicles  0.896 - 1.65 x 0.037 = 0.835  ->  0.82   (Dice 0.901)
+#
+# At 1024 x 1024 the same outlines give a slightly higher IoU than at 256 x 256 (less of
+# each structure is a boundary pixel), so these are, if anything, a little lenient. If the
+# second observer's segmentations are obtained, prepare.py's observer report shows how
+# often observer 2 meets each threshold, measured with this exact rule at 1024.
+#
+# 'left' and 'right' are the patient's: the right lung is on the LEFT of the image.
+masks:
+  - name: right_lung
+    threshold: 0.90
+  - name: left_lung
+    threshold: 0.90
+  - name: heart
+    threshold: 0.78
+  - name: right_clavicle
+    threshold: 0.82
+  - name: left_clavicle
+    threshold: 0.82
+
+# The most pixels a mask may have: one 1024 x 1024 image (the default allows 64 million).
+# A larger mask is refused at submit, before it is decoded.
+max_mask_pixels: 1048576

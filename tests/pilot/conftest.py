@@ -57,10 +57,13 @@ SHIFT = 6  # pixels the second observer's masks are moved to the right
 
 
 def load_script(name: str) -> ModuleType:
-    """Import a script of pilot/jsrt (the folder is not a package)."""
-    spec = importlib.util.spec_from_file_location(f"pilot_jsrt_{name}", PILOT / f"{name}.py")
+    """Import a script of pilot/jsrt (the folder is not a package) under its own name, as
+    running it does, so the scripts can import each other (export_pilot uses setup_pilot)."""
+    if name in sys.modules:
+        return sys.modules[name]
+    spec = importlib.util.spec_from_file_location(name, PILOT / f"{name}.py")
     module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
+    sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
 
@@ -73,6 +76,11 @@ def prepare_module() -> ModuleType:
 @pytest.fixture(scope="session")
 def setup_module() -> ModuleType:
     return load_script("setup_pilot")
+
+
+@pytest.fixture(scope="session")
+def export_module(setup_module) -> ModuleType:
+    return load_script("export_pilot")
 
 
 def rectangle(name: str, shift: int = 0) -> np.ndarray:

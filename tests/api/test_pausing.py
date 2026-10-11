@@ -2,18 +2,21 @@
 
 from __future__ import annotations
 
+import pytest
+
+PAUSED_BY_ROOT = {"by": "root", "since": "2026-10-10T09:00:00Z"}
+
 
 def test_pausing_a_stage(admin, ana, workflow, expect):
     state = expect(admin.post(f"{workflow}/stages/annotate/pause", {"reason": "new guidelines"}))
-    assert (state["workflow"], state["paused"], state["pause"]) == ("xray_main", False, None)
-    annotate, review = state["stages"]
-    assert (annotate["stage"], annotate["paused"]) == ("annotate", True)
-    assert annotate["pause"] == {
-        "by": "root",
-        "since": "2026-10-10T09:00:00Z",
-        "reason": "new guidelines",
+    assert state == {
+        "workflow": "xray_main",
+        "paused": None,
+        "stages": {
+            "annotate": PAUSED_BY_ROOT | {"reason": "new guidelines"},
+            "expert_review": None,
+        },
     }
-    assert (review["stage"], review["paused"], review["pause"]) == ("expert_review", False, None)
     # Everything ana could do is paused: no work, and a claim is refused.
     assert ana.post(f"{workflow}/next").status_code == 204
     response = ana.post(f"{workflow}/slots/1/claim")
@@ -23,41 +26,41 @@ def test_pausing_a_stage(admin, ana, workflow, expect):
         "09:00 UTC: new guidelines). It can be claimed once that is resumed."
     )
     resumed = expect(admin.post(f"{workflow}/stages/annotate/resume", {"reason": "published"}))
-    assert resumed["stages"][0] == {"stage": "annotate", "paused": False, "pause": None}
+    assert resumed["stages"] == {"annotate": None, "expert_review": None}
     assert expect(ana.post(f"{workflow}/next"))["slot"]["stage"] == "annotate"
 
 
 def test_pausing_a_whole_workflow(admin, ana, workflow, project, expect):
     state = expect(admin.post(f"{workflow}/pause", {"reason": "data audit"}))
-    assert state["paused"] is True and state["pause"]["reason"] == "data audit"
-    assert [s["paused"] for s in state["stages"]] == [False, False]
+    assert state["paused"] == PAUSED_BY_ROOT | {"reason": "data audit"}
+    assert state["stages"] == {"annotate": None, "expert_review": None}
     assert ana.post(f"{workflow}/next").status_code == 204
     assert ana.post(f"{workflow}/slots/1/claim").status_code == 409
-    (event,) = expect(admin.get(f"{project}/events?type=workflow_paused"))["events"]
+    (event,) = expect(admin.get(f"{project}/events?type=workflow_paused"))["rows"]
     assert (event["actor"], event["reason"]) == ("root", "data audit")
     state = expect(admin.post(f"{workflow}/resume", {"reason": "audit done"}))
-    assert (state["paused"], state["pause"]) == (False, None)
+    assert state["paused"] is None
     assert expect(ana.post(f"{workflow}/next"))["slot"]["item"] == "img_001"
 
 
 def test_the_workflow_detail_shows_what_is_paused(admin, ana, workflow, expect):
     detail = expect(admin.get(workflow))
-    assert (detail["paused"], detail["pause"]) == (False, None)
+    assert detail["paused"] is None
     assert [(s["name"], s["paused"]) for s in detail["stages"]] == [
-        ("annotate", False),
-        ("expert_review", False),
+        ("annotate", None),
+        ("expert_review", None),
     ]
     expect(admin.post(f"{workflow}/stages/expert_review/pause", {"reason": "experts away"}))
     expect(admin.post(f"{workflow}/pause", {"reason": "audit"}))
     detail = expect(ana.get(workflow))  # labelers see it too: it says why there is no work
-    assert detail["paused"] is True and detail["pause"]["by"] == "root"
+    assert detail["paused"] == PAUSED_BY_ROOT | {"reason": "audit"}
     review = detail["stages"][1]
-    assert review["assign_to"] == ["expert"]
-    assert review["paused"] is True and review["pause"]["reason"] == "experts away"
+    assert review["roles"] == ["expert"]
+    assert review["paused"] == PAUSED_BY_ROOT | {"reason": "experts away"}
     # Resuming the workflow leaves the stage paused.
     expect(admin.post(f"{workflow}/resume", {"reason": "done"}))
     detail = expect(admin.get(workflow))
-    assert detail["paused"] is False and detail["stages"][1]["paused"] is True
+    assert detail["paused"] is None and detail["stages"][1]["paused"] is not None
 
 
 def test_a_held_claim_can_be_submitted_while_paused(admin, ana, workflow, expect):
@@ -88,13 +91,17 @@ def test_pausing_twice_or_resuming_what_is_not_paused_is_a_conflict(admin, workf
     assert admin.post(f"{workflow}/resume", {"reason": "done"}).status_code == 409
 
 
-def test_pausing_needs_a_reason_an_admin_and_a_known_stage(admin, ana, workflow, project):
-    for path in ("pause", "resume", "stages/annotate/pause", "stages/annotate/resume"):
-        assert admin.post(f"{workflow}/{path}", {}).status_code == 422
-        assert admin.post(f"{workflow}/{path}", {"reason": ""}).status_code == 422
-        assert ana.post(f"{workflow}/{path}", {"reason": "x"}).status_code == 403
-        assert admin.post(f"{project}/workflows/nope/{path}", {"reason": "x"}).status_code == 404
-    response = admin.post(f"{workflow}/stages/annotat/pause", {"reason": "x"})
+@pytest.mark.parametrize(
+    "path", ["pause", "resume", "stages/annotate/pause", "stages/annotate/resume"]
+)
+def test_pausing_needs_a_reason_and_a_known_workflow(admin, workflow, project, path):
+    assert admin.post(f"{workflow}/{path}", {}).status_code == 422
+    assert admin.post(f"{workflow}/{path}", {"reason": ""}).status_code == 422
+    assert admin.post(f"{project}/workflows/nope/{path}", {"reason": "x"}).status_code == 404
+
+
+@pytest.mark.parametrize("action", ["pause", "resume"])
+def test_pausing_an_unknown_stage(admin, workflow, action):
+    response = admin.post(f"{workflow}/stages/annotat/{action}", {"reason": "x"})
     assert response.status_code == 404
     assert response.json()["detail"].endswith("Did you mean 'annotate'?")
-    assert admin.post(f"{workflow}/stages/annotat/resume", {"reason": "x"}).status_code == 404

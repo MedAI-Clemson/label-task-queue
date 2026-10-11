@@ -29,6 +29,7 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+from starlette.exceptions import HTTPException
 
 from labelflow.engine import (
     AlreadyExists,
@@ -61,14 +62,17 @@ class ErrorOut(BaseModel):
     )
 
 
-class ApiError(Exception):
-    """A request refused by the web layer itself. ``problems`` lists every problem found."""
+class ApiError(HTTPException):
+    """A request refused by the web layer itself. ``problems`` lists every problem found.
+
+    It is an HTTP exception so that the framework passes it through untouched wherever it
+    may be raised, even while the request body is still being read.
+    """
 
     status = 400
 
     def __init__(self, detail: str, problems: Sequence[str] = ()):
-        super().__init__(detail)
-        self.detail = detail
+        super().__init__(self.status, detail)
         self.problems = list(problems)
 
 
@@ -149,6 +153,14 @@ def _api_error(_: Request, error: Exception) -> JSONResponse:
     return _reply(error.status, error.detail, error.problems)
 
 
+def _http_error(_: Request, error: Exception) -> JSONResponse:
+    """The framework's own refusals (an unknown address, a wrong method) in the same shape."""
+    assert isinstance(error, HTTPException)
+    response = _reply(error.status_code, str(error.detail))
+    response.headers.update(error.headers or {})
+    return response
+
+
 def _unknown_label_task(_: Request, error: Exception) -> JSONResponse:
     return _reply(
         500,
@@ -177,6 +189,7 @@ def _unexpected(_: Request, error: Exception) -> JSONResponse:
 def add_error_handlers(app: FastAPI) -> None:
     app.add_exception_handler(EngineError, _engine_error)
     app.add_exception_handler(ApiError, _api_error)
+    app.add_exception_handler(HTTPException, _http_error)
     app.add_exception_handler(UnknownLabelTask, _unknown_label_task)
     app.add_exception_handler(RequestValidationError, _bad_request)
     app.add_exception_handler(Exception, _unexpected)

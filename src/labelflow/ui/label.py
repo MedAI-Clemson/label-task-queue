@@ -110,11 +110,17 @@ def slot_page(workflow: str, slot: int, request: Request, ctx: UserProject) -> R
         workflow=workflow,
         slot=held,
         packet=packet,
-        work_json=json.dumps(work),
-        ontology_json=json.dumps(ontology_json(task)),
-        page_json=json.dumps(page),
+        work_json=script_json(work),
+        ontology_json=script_json(ontology_json(task)),
+        page_json=script_json(page),
         task=task,
     )
+
+
+def script_json(data: Any) -> str:
+    """JSON for a ``<script type="application/json">`` block: ``<`` is escaped so that no
+    value can close the block, and the result is marked safe for the template."""
+    return json.dumps(data).replace("<", "\\u003c")
 
 
 def _image_url(uri: str, ui_base: str) -> str:

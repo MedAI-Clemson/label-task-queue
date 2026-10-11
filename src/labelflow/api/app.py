@@ -30,6 +30,7 @@ from labelflow.api.runtime import Runtime
 from labelflow.api.settings import Settings
 from labelflow.engine import utc_now
 from labelflow.labeltask import LabelTaskRegistry
+from labelflow.ui import mount_ui
 
 DESCRIPTION = """\
 Run labeling workflows over images, with a record of every decision.
@@ -115,4 +116,5 @@ def create_app(
 
     for module in ROUTERS:
         app.include_router(module.router)
+    mount_ui(app)  # the server-rendered pages, under /ui
     return app

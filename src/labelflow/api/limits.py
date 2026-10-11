@@ -23,8 +23,8 @@ App = Callable[[Scope, Receive, Send], Awaitable[None]]
 def as_size(byte_count: int) -> str:
     """A size in plain words: ``3 KB``, ``20 MB``."""
     if byte_count >= 1024 * 1024:
-        return f"{byte_count / (1024 * 1024):g} MB"
-    return f"{byte_count / 1024:g} KB"
+        return f"{round(byte_count / (1024 * 1024), 1):g} MB"
+    return f"{round(byte_count / 1024, 1):g} KB"
 
 
 def json_size(value: Any) -> int:

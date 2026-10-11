@@ -1,4 +1,5 @@
-"""Accounts: an admin creates them; passwords are hashed with scrypt."""
+"""Accounts: an admin creates them, passwords are hashed with scrypt, and deactivating one
+ends its logins and takes its roles away."""
 
 from __future__ import annotations
 
@@ -9,6 +10,16 @@ import sqlalchemy as sa
 
 from labelflow.api import passwords
 from labelflow.store import connect
+
+NEEDS_THREE = """\
+workflow: needs_three
+dataset: batch1
+label_task: standin@1
+stages:
+  - name: annotate
+    assign_to: annotator
+    labels_per_item: 3
+"""
 
 
 def test_an_admin_creates_an_account(admin, client, expect, new_password):
@@ -75,12 +86,53 @@ def test_the_accounts_are_listed(admin, ana, ben, expect):
     assert all(a["active"] for a in listed)
 
 
+# --- deactivation ------------------------------------------------------------------------
+
+
 def test_deactivating_an_account(admin, ana, expect):
     result = expect(admin.post("/accounts/ana/deactivate"))
-    assert result["user_id"] == "ana"
-    assert result["active"] is False
+    assert (result["user_id"], result["active"]) == ("ana", False)
+    assert (result["revoked_roles"], result["warnings"]) == ({}, [])
     listed = {a["user_id"]: a for a in expect(admin.get("/accounts"))}
     assert listed["ana"]["active"] is False
+
+
+def test_deactivating_takes_every_role_away_in_every_project(admin, ana, project, expect):
+    expect(admin.post(f"{project}/roles/expert/grant", {"user": "ana", "reason": "promoted"}))
+    expect(admin.post("/projects", {"name": "other"}), 201)
+    expect(admin.post("/projects/other/roles", {"role": "reader"}), 201)
+    expect(admin.post("/projects/other/roles/reader/grant", {"user": "ana", "reason": "x"}))
+    result = expect(admin.post("/accounts/ana/deactivate"))
+    assert result["revoked_roles"] == {"other": ["reader"], "xray": ["annotator", "expert"]}
+    holders = {r["role"]: r["holders"] for r in expect(admin.get(f"{project}/roles"))}
+    assert holders == {"annotator": ["ben"], "expert": ["dr_smith"]}
+    assert expect(admin.get("/projects/other/roles"))[0]["holders"] == []
+    # each revocation is logged with the admin and the reason
+    revoked = expect(admin.get(f"{project}/events?type=role_revoked"))["rows"]
+    assert [(e["user"], e["role"], e["actor"], e["reason"]) for e in revoked] == [
+        ("ana", "annotator", "root", "account deactivated"),
+        ("ana", "expert", "root", "account deactivated"),
+    ]
+    # deactivating again changes nothing more, and the roles are not given back
+    assert expect(admin.post("/accounts/ana/deactivate"))["revoked_roles"] == {}
+    grant = admin.post(f"{project}/roles/expert/grant", {"user": "ana", "reason": "back"})
+    assert grant.status_code == 409
+
+
+def test_deactivating_warns_when_a_workflow_is_left_short_of_people(admin, project, expect):
+    expect(admin.post(f"{project}/workflows", {"config": NEEDS_THREE}), 201)
+    (warning,) = expect(admin.post("/accounts/ben/deactivate"))["warnings"]
+    assert warning.startswith("project xray, workflow needs_three, stage 'annotate'")
+    assert "needs 3 different people" in warning
+
+
+def test_a_deactivated_account_no_longer_counts_as_a_labeler(admin, project, one_stage, expect):
+    """With ``labels_per_item: all`` a stage opens one slot per person holding the role."""
+    expect(admin.post("/accounts/ben/deactivate"))
+    config = one_stage("everyone", labels_per_item="all") | {"final": "none"}
+    expect(admin.post(f"{project}/workflows", {"config": config}), 201)
+    (stage,) = expect(admin.get(f"{project}/workflows/everyone"))["progress"]["stages"]
+    assert stage["open"] == 20  # one per item, for ana alone
 
 
 def test_an_admin_cannot_deactivate_themselves(admin, expect):
@@ -90,10 +142,7 @@ def test_an_admin_cannot_deactivate_themselves(admin, expect):
     assert admin.get("/auth/me").status_code == 200
 
 
-def test_deactivating_an_unknown_account(admin):
-    response = admin.post("/accounts/nobody/deactivate")
-    assert response.status_code == 404
-    assert response.json()["detail"] == "There is no account named 'nobody'."
+# --- passwords ---------------------------------------------------------------------------
 
 
 def test_resetting_a_password(admin, ana, client, expect, password, new_password):
@@ -108,14 +157,16 @@ def test_resetting_a_password(admin, ana, client, expect, password, new_password
     assert new.status_code == 200
 
 
-def test_resetting_the_password_of_an_unknown_account(admin, new_password):
-    response = admin.post("/accounts/nobody/password", {"password": new_password()})
-    assert response.status_code == 404
-
-
 def test_a_reset_password_must_be_long_enough(admin, ana):
     response = admin.post("/accounts/ana/password", {"password": "x" * 5})
     assert response.status_code == 422
+
+
+@pytest.mark.parametrize("action", ["deactivate", "password"])
+def test_an_unknown_account_is_not_found(admin, action, new_password):
+    response = admin.post(f"/accounts/nobody/{action}", {"password": new_password()})
+    assert response.status_code == 404
+    assert response.json()["detail"] == "There is no account named 'nobody'."
 
 
 def stored_hash(settings, username):
@@ -145,9 +196,11 @@ def test_the_default_cost_is_the_recommended_one(password):
     assert not passwords.verify_password(password.swapcase(), stored)
 
 
-def test_a_hash_that_cannot_be_read_never_matches(password):
-    for stored in ("", "plain", "scrypt$x$8$1$aa$bb", "md5$14$8$1$aa$bb", "scrypt$14$8$1$!!$??"):
-        assert not passwords.verify_password(password, stored)
+@pytest.mark.parametrize(
+    "stored", ["", "plain", "scrypt$x$8$1$aa$bb", "md5$14$8$1$aa$bb", "scrypt$14$8$1$!!$??"]
+)
+def test_a_hash_that_cannot_be_read_never_matches(password, stored):
+    assert not passwords.verify_password(password, stored)
 
 
 def test_the_comparison_is_made_in_constant_time(

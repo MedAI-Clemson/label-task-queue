@@ -478,7 +478,7 @@ class Engine:
             flow = self._flow(workflow, at, version)
             if stage.score_against:
                 flow.score(stage, slot["item"], label_id, user, label)
-            flow.slots_closed(slot["stage"], slot["item"])
+            flow.label_submitted(slot["stage"], slot["item"], user)
             return label_id
 
     def release(self, workflow: str, slot_id: int, user: str, reason: str) -> None:

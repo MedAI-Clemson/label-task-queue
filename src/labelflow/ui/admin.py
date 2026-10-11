@@ -22,7 +22,7 @@ from pydantic import ValidationError
 from labelflow.api.deps import AdminProject, AdminUser, RuntimeDep
 from labelflow.api.errors import ApiError, status_for
 from labelflow.api.media import CannotHash, content_hash
-from labelflow.api.routes.datasets import MAX_BATCH, ItemIn
+from labelflow.api.routes.datasets import ItemIn
 from labelflow.engine import EngineError, NewItem, NotAllowed
 from labelflow.engine.config import ConfigReport, resolved_yaml, to_mermaid, validate_config
 from labelflow.ui.app import CsrfChecked, redirect, render
@@ -358,8 +358,9 @@ def import_items(
 ) -> Response:
     try:
         rows = parse_items(items)
-        if len(rows) > MAX_BATCH:
-            raise ApiError(f"Import at most {MAX_BATCH} items at a time.")
+        most = getattr(runtime.settings, "max_import_items", 10_000)
+        if len(rows) > most:
+            raise ApiError(f"Import at most {most} items at a time.")
         problems: list[str] = []
         ready: list[NewItem] = []
         for number, row in enumerate(rows, start=1):
@@ -486,6 +487,7 @@ def _workflow_page(request: Request, ctx: AdminProject, workflow: str, **extra: 
         user=ctx.user,
         project=ctx.name,
         workflow=detail,
+        stages_by_name={stage.name: stage for stage in detail.stages},
         resolved=resolved_yaml(detail.config),
         diagram=to_mermaid(detail.config),
         versions=engine.config_versions(workflow),

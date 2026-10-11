@@ -29,7 +29,9 @@ class EditableTask(StandInLabelTask):
     def validate(self, label):
         label = super().validate(label)
         if label["value"] in self.rejects:
-            raise LabelValidationError([f"'{label['value']}' is no longer a value of the ontology."])
+            raise LabelValidationError(
+                [f"'{label['value']}' is no longer a value of the ontology."]
+            )
         return label
 
 
@@ -121,7 +123,9 @@ def test_a_label_task_that_crashes_while_scoring_refuses_the_submit(build, cfg):
         def score(self, label, key):
             raise ZeroDivisionError("no pixels")
 
-    engine = build(cfg(SCORED), items=1, task=Broken(), properties=lambda i: {"gold_key": {"value": "cat"}})
+    engine = build(
+        cfg(SCORED), items=1, task=Broken(), properties=lambda i: {"gold_key": {"value": "cat"}}
+    )
     slot = engine.request_work("wf", "ana")
     shown = engine.work_packet("wf", slot.slot, "ana").shown()
     before = engine.store.events()
@@ -137,7 +141,9 @@ def test_a_key_the_label_task_cannot_read_is_logged_as_invalid_and_never_blocks(
                 raise KeyError("value")  # not a LabelValidationError
             return super().validate(label)
 
-    engine = build(cfg(SCORED), items=1, task=Picky(), properties=lambda i: {"gold_key": {"value": "boom"}})
+    engine = build(
+        cfg(SCORED), items=1, task=Picky(), properties=lambda i: {"gold_key": {"value": "boom"}}
+    )
     _, label_id = claim_and_submit(engine, "ana", "cat")
     score = engine.store.get("scores", label=label_id)
     assert score["key_status"] == "invalid_key" and "value" in score["detail"]["problem"]

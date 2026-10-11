@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}Label {{ packet.item }} · label-task-queue{% endblock %}
+{% block bodyclass %}labeling{% endblock %}
+{% block mainclass %}label-page{% endblock %}
+{% block content %}
+<div class="toolbar" role="toolbar" aria-label="Mask tools">
+  <span class="crumb"><a href="{{ root }}/">Home</a> › <a href="{{ root }}/projects/{{ project }}/workflows/{{ workflow }}">{{ workflow }}</a> › stage <strong>{{ packet.stage }}</strong> › item <strong>{{ packet.item }}</strong> (slot {{ slot.slot }})</span>
+  {% if task.ontology is defined %}
+  <button type="button" data-tool="brush" class="active" aria-pressed="true" title="Brush (b): paint; with Erase on, erase">Brush</button>
+  <button type="button" data-tool="polygon" aria-pressed="false" title="Polygon (p): click vertices; click the first one, double-click or Enter to close; Backspace removes the last; Esc cancels">Polygon</button>
+  <button type="button" data-tool="pan" aria-pressed="false" title="Pan (h); or shift-drag, or drag with the middle or right button">Pan</button>
+  <label><input type="checkbox" id="erase"> Erase (e)</label>
+  <label>Brush <input type="range" id="brush-size" min="1" max="100" value="12" aria-label="Brush diameter in pixels"> <span id="brush-size-label">12 px</span></label>
+  <button type="button" id="undo" title="Ctrl+Z">Undo</button>
+  <button type="button" id="redo" title="Ctrl+Shift+Z">Redo</button>
+  <button type="button" id="fit" title="Fit (f)">Fit</button>
+  <span id="zoom" aria-live="off">100%</span>
+  <label><input type="checkbox" id="grid" checked> Pixel grid at 8x</label>
+  {% endif %}
+</div>
+<div id="viewport">
+  <canvas id="canvas" aria-label="The image {{ packet.item }}, with the masks being drawn" role="img" tabindex="0"></canvas>
+</div>
+<aside id="panel" aria-label="Label">
+  {% if task.ontology is defined %}
+  <h2>Mask class</h2>
+  <ul id="classes" class="plain"></ul>
+  <h2>Classifications</h2>
+  <div id="classifications" class="stack"></div>
+  <h2>Earlier labels</h2>
+  {% if not packet.show_prior %}
+    <p class="muted" id="blind">This stage is blind: no earlier labels are shown.</p>
+  {% elif not packet.prior_labels %}
+    <p class="muted" id="no-prior">No earlier label of this item.</p>
+  {% endif %}
+  <ul id="layers" class="plain"></ul>
+  <h2>Agreement</h2>
+  <p id="flags-caption" class="muted"></p>
+  <ul id="flags" class="plain"></ul>
+  {% else %}
+  <h2>Label</h2>
+  <p class="muted">This label task ({{ task.ref }}) has no ontology; enter the label as JSON.</p>
+  <label for="raw-label">Label (JSON)</label>
+  <textarea id="raw-label" rows="6" spellcheck="false">{"value": ""}</textarea>
+  {% if packet.prior_labels %}
+  <h2>Earlier labels</h2>
+  <ul id="layers" class="plain">
+    {% for prior in packet.prior_labels %}<li data-label="{{ prior.label }}">label {{ prior.label }} ({{ prior.stage }}): <code>{{ prior.value }}</code></li>{% endfor %}
+  </ul>
+  {% endif %}
+  {% endif %}
+  <h2>Submit</h2>
+  <button type="button" id="submit" class="primary">Submit label</button>
+  <div id="submit-problems" aria-live="assertive"></div>
+  <details class="release">
+    <summary>Give this work back</summary>
+    <form method="post" action="{{ root }}/projects/{{ project }}/workflows/{{ workflow }}/slots/{{ slot.slot }}/release" class="stack">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <label for="release-reason">Why? (kept in the record)</label>
+      <input id="release-reason" name="reason" required>
+      <button type="submit">Release</button>
+    </form>
+  </details>
+  <p class="muted small">What you were shown is reported with the label: the image's content hash{% if packet.show_prior %} and the earlier labels offered as layers{% endif %}.</p>
+</aside>
+<footer id="status" role="status" aria-live="polite">Loading the image…</footer>
+<form id="next-form" method="post" action="{{ root }}/projects/{{ project }}/workflows/{{ workflow }}/next" hidden>
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+</form>
+<script type="application/json" id="work-data">{{ work_json | safe }}</script>
+<script type="application/json" id="ontology-data">{{ ontology_json | safe }}</script>
+<script type="application/json" id="page-data">{{ page_json | safe }}</script>
+{% endblock %}
+{% block scripts %}
+<script type="module">
+  import { mount } from "{{ root }}/static/label.js";
+  const read = (id) => JSON.parse(document.getElementById(id).textContent);
+  window.labelflow = mount({ work: read("work-data"), ontology: read("ontology-data"), page: read("page-data") });
+</script>
+{% endblock %}

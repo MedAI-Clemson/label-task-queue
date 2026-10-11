@@ -19,13 +19,11 @@
       <td>{{ p.entered }}</td><td>{{ p.in_progress }}</td><td>{{ p.final }}</td><td>{{ p.unresolved }}</td><td>{{ p.none }}</td><td>{{ p.excluded }}</td>
     </tr></tbody>
   </table>
-  {% set pauses = {} %}
-  {% for s in workflow.stages %}{% set _ = pauses.update({s.name: s}) %}{% endfor %}
   <table class="list">
     <thead><tr><th>Stage</th><th>Open</th><th>Claimed</th><th>Filled</th><th>Cancelled</th><th>Claims</th><th>Actions</th></tr></thead>
     <tbody>
     {% for s in workflow.progress.stages %}
-      {% set stage = pauses.get(s.stage) %}
+      {% set stage = stages_by_name.get(s.stage) %}
       <tr>
         <td>{{ s.stage }}{% if stage %} <span class="muted">({{ stage.roles | join(", ") }})</span>{% else %} <span class="tag">removed</span>{% endif %}</td>
         <td>{{ s.open }}</td><td>{{ s.claimed }}</td><td>{{ s.filled }}</td><td>{{ s.cancelled }}</td>

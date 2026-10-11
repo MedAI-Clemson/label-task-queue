@@ -210,6 +210,43 @@ def test_the_pauses_migration_adds_and_removes_its_two_tables(config, url):
         engine.dispose()
 
 
+def test_the_roles_at_claim_migration_fills_the_new_columns_from_the_log(
+    config, url, build_engine, script
+):
+    """Revision 0004 adds ``slots.claimed_roles`` and ``labels.roles_at_claim`` and fills them
+    for existing rows from the ``slot_claimed`` events, exactly as a replay would."""
+    command.upgrade(config, "head")
+    engine = connect(url)
+    try:
+        store = SqlStore(engine, "demo")
+        script(build_engine(store))
+        before = store.snapshot()
+        slots = {row["slot"]: row for row in before["slots"]}
+        assert {s["status"] for s in slots.values()} == {"filled", "cancelled"}
+        assert all(
+            s["claimed_roles"] == ["annotator"]
+            for s in slots.values()
+            if s["status"] == "filled" and s["stage"] == "annotate"
+        )
+        assert all(s["claimed_roles"] is None for s in slots.values() if s["status"] != "filled")
+        assert before["labels"] and all(
+            row["roles_at_claim"] == slots[row["slot"]]["claimed_roles"] for row in before["labels"]
+        )
+        engine.dispose()
+        command.downgrade(config, "0003")
+        assert "claimed_roles" not in columns_of(engine, "slots")
+        assert "roles_at_claim" not in columns_of(engine, "labels")
+        engine.dispose()
+        command.upgrade(config, "0004")
+        assert {"claimed_roles"} <= columns_of(engine, "slots")
+        assert {"roles_at_claim"} <= columns_of(engine, "labels")
+        store = SqlStore(engine, "demo")
+        assert store.snapshot() == before
+        assert store.verify_derived().identical
+    finally:
+        engine.dispose()
+
+
 def test_there_is_one_head_and_it_can_be_undone(config, url, migrated):
     heads = ScriptDirectory.from_config(config).get_heads()
     assert len(heads) == 1

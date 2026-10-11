@@ -18,6 +18,9 @@ dependencies = [
     "numpy==2.5.4",
     "uvicorn==0.54.0",
     "pyarrow==26.0.0",
+    # the server-rendered interface (labelflow.ui): templates and form posts
+    "jinja2==3.1.6",
+    "python-multipart==0.0.32",
 ]
 
 [project.optional-dependencies]
@@ -28,6 +31,10 @@ dev = [
     # starlette's TestClient (used by fastapi.testclient) needs httpx2
     "httpx2==2.13.1",
 ]
+# The browser test of the interface (tests/ui/test_browser.py) is skipped without this.
+# 1.48 matches the Chromium build in ~/.cache/ms-playwright (chromium-1140); run
+# `playwright install chromium` to download one.
+browser = ["playwright==1.48.0"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/labelflow"]

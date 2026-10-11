@@ -1,16 +1,15 @@
-"""Logging in and out, and what happens without a valid login."""
+"""Logging in and out, what happens without a valid login, and who may reach what."""
 
 from __future__ import annotations
 
 import hashlib
 import secrets
-from dataclasses import replace
 
 import pytest
 import sqlalchemy as sa
 from fastapi.testclient import TestClient
 
-from labelflow.api import create_app, identity
+from labelflow.api import identity
 from labelflow.store import connect
 
 NOT_LOGGED_IN = "You are not logged in. Log in with POST /auth/login."
@@ -51,12 +50,10 @@ def test_the_bearer_token_logs_you_in(admin, expect):
     }
 
 
-def test_the_cookie_is_marked_secure_when_asked(settings, label_tasks, admin, clock, password):
-    with TestClient(
-        create_app(replace(settings, cookie_secure=True), label_tasks=label_tasks)
-    ) as c:
-        response = login(c, "root", password)
-        assert "Secure" in response.headers["set-cookie"]
+def test_the_cookie_is_marked_secure_when_asked(app_with, password):
+    root, _ = app_with(cookie_secure=True)
+    response = login(root.client, "root", password)
+    assert "Secure" in response.headers["set-cookie"]
 
 
 def test_a_wrong_password_and_an_unknown_user_get_the_same_answer(
@@ -181,6 +178,9 @@ def test_only_a_fingerprint_of_the_token_is_stored(admin, settings):
     assert identity.token_hash(admin.token) == rows[0]["token_hash"]
 
 
+# --- who may reach what ------------------------------------------------------------------
+
+
 ADMIN_ENDPOINTS = [
     ("GET", "/accounts", None),
     ("POST", "/accounts", {"username": "cy", "password": secrets.token_urlsafe(16)}),
@@ -206,6 +206,10 @@ ADMIN_ENDPOINTS = [
         "/projects/xray/workflows/xray_main/stages/annotate/cancel-open-slots",
         {"reason": "x"},
     ),
+    ("POST", "/projects/xray/workflows/xray_main/pause", {"reason": "x"}),
+    ("POST", "/projects/xray/workflows/xray_main/resume", {"reason": "x"}),
+    ("POST", "/projects/xray/workflows/xray_main/stages/annotate/pause", {"reason": "x"}),
+    ("POST", "/projects/xray/workflows/xray_main/stages/annotate/resume", {"reason": "x"}),
     ("GET", "/projects/xray/workflows/xray_main/items/img_001/explain", None),
     ("GET", "/projects/xray/workflows/xray_main/reports/scores", None),
     ("GET", "/projects/xray/workflows/xray_main/reports/sampling", None),
@@ -229,7 +233,6 @@ def test_every_endpoint_needs_a_login(anon, method, path, body):
 
 
 LABELER_ENDPOINTS = [
-    ("GET", "/projects"),
     ("GET", "/projects/xray/workflows"),
     ("GET", "/projects/xray/workflows/xray_main"),
     ("POST", "/projects/xray/workflows/xray_main/next"),
@@ -240,9 +243,22 @@ LABELER_ENDPOINTS = [
 ]
 
 
-@pytest.mark.parametrize(("method", "path"), LABELER_ENDPOINTS)
+@pytest.mark.parametrize(("method", "path"), [("GET", "/projects"), *LABELER_ENDPOINTS])
 def test_the_labeler_endpoints_need_a_login(anon, method, path):
     assert anon.request(method, path).status_code == 401
+
+
+@pytest.mark.parametrize(("method", "path"), LABELER_ENDPOINTS)
+def test_a_project_you_hold_no_role_in_is_not_found(new_person, workflow, method, path):
+    """Someone without a role in the project gets the answer an unknown project gives, so
+    the answers never say which projects exist."""
+    stranger = new_person("stranger")
+    response = stranger.request(method, path, json={})
+    assert response.status_code == 404, (method, path, response.text)
+    assert response.json()["detail"] == "There is no project named 'xray'."
+    assert stranger.get("/projects/nope/workflows").json()["detail"] == (
+        "There is no project named 'nope'."
+    )
 
 
 def test_an_unknown_project_is_not_found_for_an_admin_and_forbidden_for_a_labeler(admin, ana):

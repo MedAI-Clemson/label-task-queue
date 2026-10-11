@@ -110,6 +110,38 @@ class Flow:
         self._complete_if_ready(stage, item)
         self._finalize_if_done(item)
 
+    def label_submitted(self, stage: str, item: str, user: str) -> None:
+        """A label was logged: free what it strands, then move the item on if it can.
+
+        A slot of another stage reserved for the labeler (``labels_per_item: all``) can
+        never be filled now, since nobody labels an item twice in a workflow: a role change,
+        or a person holding roles of two stages, can leave one behind. Each such slot is
+        cancelled with a logged event, and the stages it leaves complete as usual.
+        """
+        stranded: dict[str, list[int]] = {}
+        for row in self.store.select("slots", workflow=self.workflow, item=item, status="open"):
+            if row["reserved_for"] == user and row["stage"] != stage:
+                stranded.setdefault(row["stage"], []).append(row["slot"])
+        for other, slots in stranded.items():
+            reason = f"reserved for {user}, who labeled this item in {stage}"
+            self._emit(
+                ev.SlotsCancelled,
+                stage=other,
+                item=item,
+                reason=reason,
+                slots=tuple(sorted(slots)),
+                because=(
+                    f"{other}.labels_per_item = all reserved slot(s) "
+                    f"{and_list(str(s) for s in sorted(slots))} for {user}; {user} labeled "
+                    f"this item in {stage}, and nobody labels an item twice in a workflow, "
+                    "so the slot(s) can never be filled"
+                ),
+            )
+        self._complete_if_ready(stage, item)
+        for other in stranded:
+            self._complete_if_ready(other, item)
+        self._finalize_if_done(item)
+
     # --- admission ------------------------------------------------------------------------
 
     def _arrive(self, stage: Stage, item: str, source: str, cause: str) -> None:

@@ -54,7 +54,7 @@ def synthetic_xray(size: int, seed: int = 7) -> np.ndarray:
     body = 150 * np.exp(-(((x - 0.5) / 0.35) ** 2 + ((y - 0.55) / 0.5) ** 2))
     lungs = np.zeros_like(body)
     for cx in (0.34, 0.66):
-        lungs += 70 * np.exp(-(((x - cx) / 0.13) ** 2 + ((y - 0.5) / 0.26) ** 2) ** 2)
+        lungs += 70 * np.exp(-((((x - cx) / 0.13) ** 2 + ((y - 0.5) / 0.26) ** 2) ** 2))
     spine = 40 * np.exp(-(((x - 0.5) / 0.04) ** 2))
     ribs = 12 * np.sin(y * 60) * np.exp(-(((x - 0.5) / 0.3) ** 2))
     rng = np.random.default_rng(seed)

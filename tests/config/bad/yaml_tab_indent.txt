@@ -1,0 +1,6 @@
+The config has 1 error. Fix it and check again.
+
+Errors:
+  1. line 7
+     The file is not valid YAML. A tab character is used where YAML needs spaces. Indent
+     with spaces. Line 7 reads: assign_to: annotator

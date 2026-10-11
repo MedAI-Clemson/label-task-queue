@@ -1,0 +1,11 @@
+workflow: xray main
+dataset: xray_batch_1
+label_task: image_ontology@1
+
+stages:
+  - name: expert review
+    assign_to: Expert-Role
+
+  - name: second
+    assign_to: [annotator, "3rd_party"]
+    score_against: gold key

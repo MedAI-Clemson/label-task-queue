@@ -1,0 +1,186 @@
+{
+  "$defs": {
+    "LabelsFraction": {
+      "additionalProperties": false,
+      "description": "A fraction of admitted items get several labels; the rest get one.\n\n``{count: 3, fraction: 0.2}`` means 20% of admitted items get 3 labels and the\nrest get 1. Which items get 3 is decided by a hashed draw.",
+      "properties": {
+        "count": {
+          "description": "Labels for the items chosen by the draw.",
+          "minimum": 2,
+          "title": "Count",
+          "type": "integer"
+        },
+        "fraction": {
+          "description": "Share of admitted items that get `count`.",
+          "exclusiveMaximum": 1,
+          "exclusiveMinimum": 0,
+          "title": "Fraction",
+          "type": "number"
+        }
+      },
+      "required": [
+        "count",
+        "fraction"
+      ],
+      "title": "LabelsFraction",
+      "type": "object"
+    },
+    "Stage": {
+      "additionalProperties": false,
+      "description": "One stage of a workflow: its input, the roles assigned to it, and its settings.",
+      "properties": {
+        "assign_to": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "items": {
+                "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            }
+          ],
+          "description": "The role, or list of roles, whose holders may claim this stage's slots.",
+          "title": "Assign To"
+        },
+        "input": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z][A-Za-z0-9_]*(\\.(agreed|disagreed))?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Where the stage takes items from: an earlier stage (`annotate`), only the items whose labels agreed (`annotate.agreed`) or disagreed (`annotate.disagreed`). Omit it to take every item of the dataset.",
+          "title": "Input"
+        },
+        "labels_per_item": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "const": "all",
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/LabelsFraction"
+            }
+          ],
+          "default": 1,
+          "description": "How many different people label each admitted item: a number, `{count, fraction}`, or `all` (everyone holding the roles at admission).",
+          "title": "Labels Per Item"
+        },
+        "name": {
+          "description": "The stage name, unique in the workflow.",
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "sample": {
+          "default": 1.0,
+          "description": "The fraction of arriving items admitted, by hashed draw. Default: all.",
+          "exclusiveMinimum": 0,
+          "maximum": 1,
+          "title": "Sample",
+          "type": "number"
+        },
+        "score_against": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "An item property holding a key (such as a gold-standard answer) that each label is scored against. It changes no routing.",
+          "title": "Score Against"
+        },
+        "show_prior": {
+          "default": true,
+          "description": "Whether labelers see earlier labels for the item. `false` makes the stage blind.",
+          "title": "Show Prior",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "assign_to"
+      ],
+      "title": "Stage",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A labeling workflow: the dataset it labels, the label task, the stages in order (each naming its input, its roles and its settings), and the final step that says where final labels come from. Stage names must be unique, an input must name an earlier stage, and every item must be able to reach a final label.",
+  "properties": {
+    "dataset": {
+      "description": "The dataset whose items enter the workflow.",
+      "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+      "title": "Dataset",
+      "type": "string"
+    },
+    "final": {
+      "anyOf": [
+        {
+          "items": {
+            "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "const": "none",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Where final labels come from: an ordered list of stages, where the first stage that labeled an item supplies its final label. `none` means the workflow produces no final labels. Default: every stage, last-listed first.",
+      "title": "Final"
+    },
+    "label_task": {
+      "description": "The label task, as `name@version`, for example `image_ontology@1`.",
+      "pattern": "^[A-Za-z][A-Za-z0-9_]*@[0-9]+$",
+      "title": "Label Task",
+      "type": "string"
+    },
+    "stages": {
+      "description": "The stages, in order.",
+      "items": {
+        "$ref": "#/$defs/Stage"
+      },
+      "minItems": 1,
+      "title": "Stages",
+      "type": "array"
+    },
+    "workflow": {
+      "description": "The workflow name, unique in the project.",
+      "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+      "title": "Workflow",
+      "type": "string"
+    }
+  },
+  "required": [
+    "workflow",
+    "dataset",
+    "label_task",
+    "stages"
+  ],
+  "title": "Labeling workflow config",
+  "type": "object"
+}

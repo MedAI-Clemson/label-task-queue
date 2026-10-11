@@ -4,6 +4,11 @@ A config is the single source of truth for a workflow. It is written as YAML and
 parsed into these models. The models are immutable, and they reject unknown keys so
 that an invented key is caught rather than silently ignored.
 
+Any ``WorkflowConfig`` that exists is valid: besides the types of the keys, it has passed
+the graph rules in ``graph.py`` (unique stage names, inputs that name earlier stages, a
+sound ``final``, and every item able to reach a final label). Use ``validate_config`` to
+get every problem in plain language instead of an exception.
+
 Example::
 
     workflow: xray_main
@@ -26,7 +31,9 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator, model_validator
+
+from ltq.engine.config.graph import ConfigGraphError, check_graph
 
 NAME_PATTERN = r"^[A-Za-z][A-Za-z0-9_]*$"
 INPUT_PATTERN = r"^[A-Za-z][A-Za-z0-9_]*(\.(agreed|disagreed))?$"
@@ -76,7 +83,7 @@ class Stage(_Model):
             "(`annotate.disagreed`). Omit it to take every item of the dataset."
         ),
     )
-    assign_to: Name | tuple[Name, ...] = Field(
+    assign_to: Name | Annotated[tuple[Name, ...], Field(min_length=1)] = Field(
         description="The role, or list of roles, whose holders may claim this stage's slots."
     )
     sample: float = Field(
@@ -102,6 +109,14 @@ class Stage(_Model):
         description="Whether labelers see earlier labels for the item. "
         "`false` makes the stage blind.",
     )
+
+    @field_validator("sample", mode="before")
+    @classmethod
+    def _sample_is_a_number(cls, value: object) -> object:
+        # YAML reads `true` as a boolean, and a float field would quietly accept it as 1.0.
+        if isinstance(value, bool):
+            raise ValueError("sample must be a number, not true or false")
+        return value
 
     @property
     def roles(self) -> tuple[str, ...]:
@@ -134,6 +149,17 @@ class WorkflowConfig(_Model):
             "workflow produces no final labels. Default: every stage, last-listed first."
         ),
     )
+
+    @model_validator(mode="after")
+    def _check_graph_rules(self) -> WorkflowConfig:
+        """Refuse a config whose stages do not fit together (see ``graph.py`` for the rules).
+
+        Any ``WorkflowConfig`` that exists is valid, so the engine can trust it.
+        """
+        problems = check_graph(self.model_dump())
+        if problems:
+            raise ConfigGraphError(problems)
+        return self
 
     def stage(self, name: str) -> Stage:
         """Return the stage with this name. Raises KeyError if there is none."""

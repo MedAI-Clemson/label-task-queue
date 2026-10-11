@@ -1,0 +1,20 @@
+The config has 4 errors. Fix them and check again.
+
+Errors:
+  1. stage 'first', key 'labels_per_item'
+     labels_per_item cannot be 0. It can be a whole number of 1 or more, such as 2 (each
+     item gets that many labels); `all` (every person holding the stage's roles labels each
+     item); or `{count: 3, fraction: 0.2}` (20% of items get 3 labels, the rest get 1).
+  2. stage 'second', key 'labels_per_item'
+     labels_per_item cannot be 'two'. It can be a whole number of 1 or more, such as 2 (each
+     item gets that many labels); `all` (every person holding the stage's roles labels each
+     item); or `{count: 3, fraction: 0.2}` (20% of items get 3 labels, the rest get 1).
+  3. stage 'third', key 'labels_per_item'
+     labels_per_item cannot be 2.5. It can be a whole number of 1 or more, such as 2 (each
+     item gets that many labels); `all` (every person holding the stage's roles labels each
+     item); or `{count: 3, fraction: 0.2}` (20% of items get 3 labels, the rest get 1).
+  4. stage 'fourth', key 'labels_per_item'
+     labels_per_item cannot be 'All'. Did you mean 'all'? It can be a whole number of 1 or
+     more, such as 2 (each item gets that many labels); `all` (every person holding the
+     stage's roles labels each item); or `{count: 3, fraction: 0.2}` (20% of items get 3
+     labels, the rest get 1).

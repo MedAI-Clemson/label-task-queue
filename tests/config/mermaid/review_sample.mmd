@@ -1,0 +1,9 @@
+flowchart TD
+    dataset(["Dataset: xray_batch_1"])
+    stage1["annotate<br/>role: annotator<br/>1 label per item"]
+    stage2["expert_review<br/>role: expert<br/>1 label per item"]
+    final(["Final label"])
+    dataset --> stage1
+    stage1 -->|"20% sample"| stage2
+    stage2 -->|"1st"| final
+    stage1 -->|"2nd"| final

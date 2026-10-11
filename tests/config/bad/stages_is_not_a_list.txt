@@ -1,0 +1,6 @@
+The config has 1 error. Fix it and check again.
+
+Errors:
+  1. top level, key 'stages'
+     `stages` must be a list of stages, each starting with '- name: ...'; got a group of
+     keys.

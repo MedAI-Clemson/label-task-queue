@@ -1,0 +1,6 @@
+The config has 1 error. Fix it and check again.
+
+Errors:
+  1. top level, key 'final'
+     `final` must be a list of stage names, such as [expert_review, annotate], or the word
+     none. Got 'annotate'. To use one stage, write `final: [annotate]`.

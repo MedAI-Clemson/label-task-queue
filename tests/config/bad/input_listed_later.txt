@@ -1,0 +1,7 @@
+The config has 1 error. Fix it and check again.
+
+Errors:
+  1. stage 'expert_review', key 'input'
+     Stage 'expert_review' takes its items from 'annotate', but 'annotate' is listed after
+     'expert_review'. Stages are listed in order, and an input must be a stage listed
+     earlier. Move 'annotate' above 'expert_review'.

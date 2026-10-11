@@ -1,0 +1,5 @@
+The config has 1 error. Fix it and check again.
+
+Errors:
+  1. stage 1
+     Stage 1 must be a group of keys such as `name` and `assign_to`; got 'annotate'.

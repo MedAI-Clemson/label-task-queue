@@ -1,0 +1,14 @@
+The config has 4 errors. Fix them and check again.
+
+Errors:
+  1. stage 'first', key 'labels_per_item'
+     labels_per_item has an unknown key 'fractoin'. Did you mean 'fraction'?
+  2. stage 'second', key 'labels_per_item'
+     labels_per_item: `count` must be a whole number of 2 or more; got 1. For one label per
+     item, write `labels_per_item: 1`.
+  3. stage 'second', key 'labels_per_item'
+     labels_per_item: `fraction` must be more than 0 and less than 1 (for example 0.2 for
+     20%); got 1.5.
+  4. stage 'third', key 'labels_per_item'
+     labels_per_item is missing `fraction`, the share of items that get `count` labels, for
+     example 0.2. To give every item 3 labels, write `labels_per_item: 3`.

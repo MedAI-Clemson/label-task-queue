@@ -1,0 +1,15 @@
+The config has 4 errors. Fix them and check again.
+
+Errors:
+  1. top level, key 'dataset'
+     The required key 'dataset' is missing. Name the dataset whose items enter the workflow,
+     for example `dataset: xray_batch_1`.
+  2. top level, key 'label_task'
+     The required key 'label_task' is missing. Name the label task and its version, for
+     example `label_task: image_ontology@1`.
+  3. stage 'annotate', key 'assign_to'
+     The required key 'assign_to' is missing. Name the role (or list of roles) whose holders
+     label this stage, for example `assign_to: annotator`.
+  4. stage 2, key 'name'
+     The required key 'name' is missing. Give each stage a name, for example
+     `name: annotate`.

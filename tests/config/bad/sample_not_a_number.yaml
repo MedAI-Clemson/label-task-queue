@@ -1,0 +1,13 @@
+workflow: xray_main
+dataset: xray_batch_1
+label_task: image_ontology@1
+
+stages:
+  - name: annotate
+    assign_to: annotator
+    sample: lots
+
+  - name: expert_review
+    input: annotate
+    assign_to: expert
+    sample: 20%

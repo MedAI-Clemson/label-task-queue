@@ -1,0 +1,6 @@
+The config has 1 error. Fix it and check again.
+
+Errors:
+  1. stage 'annotate', key 'name'
+     Stage names must be unique, but 'annotate' is used by stages 1 and 3. Rename all but
+     one of them.

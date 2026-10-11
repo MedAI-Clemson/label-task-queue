@@ -1,0 +1,7 @@
+The config has 1 error. Fix it and check again.
+
+Errors:
+  1. line 8
+     The file is not valid YAML. The file holds more than one YAML document (a line with
+     only '---' starts a new one). A workflow is a single document: remove the extra '---'
+     line. Line 8 reads: ---

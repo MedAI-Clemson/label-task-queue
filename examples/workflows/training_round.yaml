@@ -1,0 +1,13 @@
+# Training labelers on gold-standard data: everyone with the trainee role labels every
+# image, and each label is scored against the expert's answer.
+workflow: training_round_1
+dataset: gold_set_1              # each image carries a gold_key property
+label_task: image_ontology@1
+
+stages:
+  - name: gold_read
+    assign_to: trainee
+    labels_per_item: all         # every trainee labels every image
+    score_against: gold_key
+
+final: none                      # training produces scores, not final labels

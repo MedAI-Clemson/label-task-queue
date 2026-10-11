@@ -1,0 +1,9 @@
+The config has 2 errors. Fix them and check again.
+
+Errors:
+  1. stage 'annotate', key 'assign_to'
+     The required key 'assign_to' is missing. Name the role (or list of roles) whose holders
+     label this stage, for example `assign_to: annotator`.
+  2. stage 'annotate', key 'roles'
+     'roles' is not a known key. The keys allowed in a stage are: name, input, assign_to,
+     sample, labels_per_item, score_against, show_prior.

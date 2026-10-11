@@ -1,0 +1,5 @@
+workflow: xray_main
+
+stages:
+  - name: annotate
+  - assign_to: expert

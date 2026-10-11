@@ -1,0 +1,8 @@
+The config has 1 error. Fix it and check again.
+
+Errors:
+  1. stage 'adjudicate', key 'input'
+     Stage 'adjudicate' takes 'annotate.disagreed', but 'annotate' labels each item only
+     once (labels_per_item is 1), so no item can agree or disagree and this input would
+     always be empty. Set `labels_per_item` to 2 or more on 'annotate', or take its whole
+     output with `input: annotate`.

@@ -199,14 +199,16 @@ on `main` is `e77c9d0`. To tag it, run
     The Shenzhen set and Kvasir-SEG were the fallbacks. Neither was needed. The Shenzhen
     set has 662 images; the NLM gives it outlines of the abnormalities on the TB images,
     but no lung masks. Kvasir-SEG has no classification.
-36. **Proposed: the classification is `tb_findings: present | absent`**, with the gold answer
-    from the dataset's file name. `present` means any radiographic sign of TB, active or
-    old: 24 of the 58 TB readings describe inactive or healed disease, or have no report.
-    Asking about *active* TB instead would need a radiologist's re-read for the gold.
-37. **Proposed: lung masks agree at IoU 0.90.** The dataset has a single observer, and I
-    found no published inter-observer study of its masks. The threshold sits near the mean
-    minus 1.65 sd of the SCR study's human-observer lung overlap (0.946 ± 0.018). It is to
-    be revisited with the pilot's double reads.
+36. **Decided (Hudson, Oct 11, 2026): `tb_findings: present | absent` means any
+    radiographic sign of TB, active or old.** This matches the dataset's label, which
+    supplies the gold answer through the file name. 24 of the 58 TB readings describe
+    inactive or healed disease, or have no report; their gold answer is `present`. The
+    ontology and the participants' section of the kit's README say so.
+37. **Decided (Hudson, Oct 11, 2026): lung masks agree at IoU 0.90 for the pilot.** The
+    dataset has a single observer, and I found no published inter-observer study of its
+    masks. The threshold sits near the mean minus 1.65 sd of the SCR study's human-observer
+    lung overlap (0.946 ± 0.018). After the pilot it will be revisited from the agreement of
+    our own double reads. A new threshold is a new label-task version (`montgomery_tb@2`).
 38. **Decided (by the data): items get opaque names.** Montgomery's file names give the TB
     answer away, through their last digit and through their numbers (every normal image is
     numbered below every TB image), and the labeling page shows an item's name. So items
@@ -220,9 +222,15 @@ on `main` is `e77c9d0`. To tag it, run
       That file is git-ignored and has mode 0600. The script prints a warning to hand the
       passwords out privately.
     - The role `admin` in the CSV makes a server administrator.
-40. **Proposed: the gold set has 12 images, stratified on the TB answer (5 and 7).** The main
-    set has the other 126. Images of the same patient are not kept together; this affects
-    3 patients.
+40. **Decided (Hudson, Oct 11, 2026): the gold set has 12 images, stratified on the TB answer
+    (5 and 7), and each patient's images stay on one side of the split.**
+    - The main set has the other 126 images.
+    - The split joins the images of one patient through `same_patient_as`, following the
+      links both ways and through chains. It then draws whole patients, seeded and
+      stratified; a patient that would overshoot a stratum's share is skipped.
+    - On the real data the counts are unchanged: 5 TB and 7 normal in the gold set, 53 and
+      73 in the main set. Both multi-image patients (three images and two) are in the main
+      set.
 
 ## Hardening after review (Oct 11, 2026)
 

@@ -235,44 +235,52 @@ The script does the following:
   (`--credentials` to change where).
 - It grants the roles, giving a reason for each.
 - It splits the images with `--seed` (default 20261011): 12 go to `montgomery_gold`, 5
-  with TB findings and 7 without, and the other 126 go to `montgomery_main`.
+  with TB findings and 7 without, and the other 126 go to `montgomery_main`. All images of
+  one patient stay on the same side; `prepare.py`'s `same_patient_as` property says which
+  images those are. On the real data, both patients with several images (three images in
+  all for one, two for the other) land in the main set.
 - It imports the images in batches and starts both workflows with the same seed.
 - It prints the validator's warnings and the next steps.
 
 Running it again only does what is missing. It does not start the training round while
 nobody holds `trainee`.
 
-Two staffing notes:
-
-- `montgomery_main` needs two experts and two annotators. The reasons are the same as in
+Staffing: `montgomery_main` needs two experts and two annotators. The reasons are the same as in
   the JSRT kit: a disputed double read that is also drawn for review needs two different
   experts, and a double read needs two annotators. The example accounts have both.
-- Images of the same patient are not kept together, so a gold image's patient may appear
-  again in the main set. This affects three patients.
 
-## 5. What each person does
+## 5. What to label (for participants)
 
-Everyone logs in at `http://<server>/ui/`, picks a workflow and presses "Get work".
-**Left and right are the patient's**: the right lung is on the left of the image, by the
-"R" marker.
+Give this section to everyone who labels. Log in at `http://<server>/ui/`, pick your
+workflow and press "Get work". Each image asks for three things.
 
-- **Lungs.** Follow the dataset's convention:
-  - exclude the part of the lung behind the heart;
-  - follow the heart border and the diaphragm into a sharp costophrenic angle;
-  - where disease hides the edge, draw the boundary you infer.
-- **`tb_findings`.** Answer `present` for any radiographic sign of TB, active or old:
-  - infiltrates, cavities, effusion and miliary nodules;
-  - and also scars, fibrosis and calcified granulomas.
+**Left and right are the patient's.** The patient's right lung is on the **left** of the
+image, on the side of the "R" marker.
 
-  Answer `absent` for a normal film.
-- **Trainees**, in `montgomery_training_1`: both lungs and the TB answer on each of the 12
-  gold images. The key is never shown to them. Afterwards the admin reviews the score
-  report with them.
+1. **Right lung**, then **left lung**: one mask each. Follow the dataset's convention:
+   - leave out the part of the lung behind the heart;
+   - follow the heart border, and the diaphragm down into a sharp costophrenic angle;
+   - where disease hides the edge, draw the boundary you infer.
+2. **TB findings: present or absent.** Answer **present** if the film shows **any
+   radiographic sign of TB, active or old**. Active signs are infiltrates, cavities,
+   effusion and miliary nodules. Old signs are scars, fibrosis, volume loss and calcified
+   granulomas. Answer **absent** only for a normal film. Do not try to judge whether the
+   disease is active: that is not the question.
+
+What each role does:
+
+- **Trainees**, in `montgomery_training_1`: label each of the 12 training images. The
+  answer key is never shown to you. Afterwards the admin goes through your score report
+  with you.
+- **Annotators**, in `montgomery_main`: label images until none are left. About one image
+  in five is also labeled by a second annotator. Neither of you sees the other's label.
+- **Experts**, in `montgomery_main`, have two kinds of work:
+  - **Adjudication:** two annotators disagreed. You see both labels as layers, with the
+    disagreements flagged, and you submit a complete label. "Start from this layer" copies
+    one label into the editor for you to correct.
+  - **Blind review** of a 10% sample: you label the image without seeing the annotation.
 - **Admin**: when a trainee is ready, grants them `annotator` and revokes `trainee`, with a
   reason, on the project page.
-- **Annotators** and **experts**, in `montgomery_main`, work as in the JSRT kit's section 5:
-  - Experts adjudicate the disputed double reads, and may use "Start from this layer".
-  - Experts also do the blind 10% review.
 
 ## 6. Export, and the audit
 
@@ -303,16 +311,21 @@ Beyond the checklist, the pilot measures:
 It also shows whether the reading-based TB answer is one readers can reproduce from the
 film. Join `labels.csv` to the `reading` property to see the inactive-disease cases.
 
-## Open questions
+## Decisions (Hudson, Oct 11, 2026)
 
-- **The lung threshold, 0.90.** I found no published inter-observer study of the
-  Montgomery masks, and the dataset has a single observer. The threshold rests on the SCR study's human-observer agreement on JSRT lungs (IoU 0.946 ±
-  0.018); see the ontology. After the pilot, check the double reads' lung IoUs:
-  - if many careful pairs fall between 0.85 and 0.90, mostly on TB images, lower the
-    threshold;
-  - or give TB images their own review.
-- **`tb_findings` covers old disease.** It means "any sign of TB, active or old" to match
-  the dataset's label. To ask about *active* TB instead, the gold answer would need a
-  radiologist's re-read of the 24 inactive cases.
-- **Sex `O`, and children.** The dataset includes one sex `O` and children as young as 4.
-  Both are kept as given.
+- **`tb_findings` means any radiographic sign of TB, active or old.** This matches the
+  dataset's label, which counts old disease as a TB manifestation: 24 of the 58 TB images
+  have readings of inactive, healed or stable disease. Participants are told so in
+  section 5.
+- **The lung threshold stays at 0.90 for the pilot.** I found no published inter-observer
+  study of the Montgomery masks, and the dataset has a single observer. So 0.90 rests on
+  the SCR study's human-observer agreement on JSRT lungs (IoU 0.946 ± 0.018); see the
+  ontology.
+  - After the pilot it will be revisited from the agreement of our own double reads: the
+    lung IoUs in the `consensus_checked` events of `montgomery_main`.
+  - A new threshold means a new label-task version (`montgomery_tb@2` in a new file),
+    because workflows and recorded labels name the version they used.
+- **The gold set has 12 images.**
+- **Each patient's images stay together** in the split; see section 4.
+
+The dataset also includes one sex `O` and children as young as 4. Both are kept as given.

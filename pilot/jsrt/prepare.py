@@ -48,7 +48,6 @@ import argparse
 import hashlib
 import json
 import re
-import statistics
 import sys
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
@@ -57,9 +56,13 @@ from typing import Any
 
 import numpy as np
 
-from labelflow.labeltask import LabelValidationError, OntologyLabelTask, load_ontology, rle
+from labelflow.labeltask import OntologyLabelTask, load_ontology, rle
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent / "common"))
+
+from kit_prepare import PrepareError, iou_summary, validate_key, write_png  # noqa: E402
+
 DEFAULT_ONTOLOGY = HERE / "ontology" / "jsrt_scr.yaml"
 
 RAW_SIDE = 2048
@@ -72,10 +75,6 @@ IMAGE_ID = re.compile(r"^JPC(LN|NN)\d{3}$")
 # becomes the mask class of the same name. 'left' is the patient's left, which is on the
 # right of a PA image as displayed.
 STRUCTURES = ("right_lung", "left_lung", "heart", "right_clavicle", "left_clavicle")
-
-
-class PrepareError(Exception):
-    """The input is not what the script expects; the message says what to fix."""
 
 
 # --- The images ---------------------------------------------------------------------------
@@ -138,15 +137,6 @@ def to_display(
     high = max(high, low + 1.0)  # a flat image: avoid dividing by zero
     scaled = (np.clip(image, low, high) - low) / (high - low) * 255.0
     return np.rint(scaled).astype(np.uint8)
-
-
-def write_png(pixels: np.ndarray, path: Path) -> str:
-    """Write an 8-bit greyscale PNG and return the SHA-256 of the file."""
-    from PIL import Image  # the 'pilot' extra: pip install -e ".[pilot]"
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    Image.fromarray(pixels, mode="L").save(path, format="PNG")
-    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def find_images(root: Path) -> dict[str, Path]:
@@ -411,14 +401,6 @@ def build_key(masks: dict[str, np.ndarray], nodule: str) -> dict[str, Any]:
     }
 
 
-def validate_key(task: OntologyLabelTask, key: dict[str, Any], what: str) -> list[str]:
-    try:
-        task.validate(key)
-    except LabelValidationError as error:
-        return [f"{what}: {problem}" for problem in error.problems]
-    return []
-
-
 def observer_report(task: OntologyLabelTask, pairs: dict[str, tuple[dict, dict]]) -> dict:
     """Per mask class, the IoU between observer 1 and observer 2 over every image with
     both, from the label task's own consensus check (``check_consensus(...).detail``)."""
@@ -434,27 +416,9 @@ def observer_report(task: OntologyLabelTask, pairs: dict[str, tuple[dict, dict]]
         "consensus_rule": task.consensus_rule_version,
         "ontology": task.ontology_version,
         "structures": {
-            mask.name: _summary(sorted(ious[mask.name]), mask.threshold)
-            for mask in task.ontology.masks
+            mask.name: iou_summary(ious[mask.name], mask.threshold) for mask in task.ontology.masks
         },
         "images_where_every_field_agreed": agreed,
-    }
-
-
-def _summary(values: list[float], threshold: float) -> dict[str, Any]:
-    if not values:
-        return {"n": 0, "threshold": threshold}
-    return {
-        "n": len(values),
-        "threshold": threshold,
-        "mean": round(statistics.fmean(values), 4),
-        "sd": round(statistics.stdev(values), 4) if len(values) > 1 else None,
-        "median": round(statistics.median(values), 4),
-        "p05": round(float(np.percentile(values, 5)), 4),
-        "min": round(values[0], 4),
-        "fraction_at_or_above_threshold": round(
-            sum(v >= threshold for v in values) / len(values), 4
-        ),
     }
 
 

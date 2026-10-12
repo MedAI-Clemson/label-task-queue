@@ -56,14 +56,17 @@ SCR_FOLDERS = {
 SHIFT = 6  # pixels the second observer's masks are moved to the right
 
 
-def load_script(name: str) -> ModuleType:
-    """Import a script of pilot/jsrt (the folder is not a package) under its own name, as
-    running it does, so the scripts can import each other (export_pilot uses setup_pilot)."""
-    if name in sys.modules:
-        return sys.modules[name]
-    spec = importlib.util.spec_from_file_location(name, PILOT / f"{name}.py")
+def load_script(name: str, kit: str = "jsrt") -> ModuleType:
+    """Import a script of a pilot kit (the folders are not packages) as running it does:
+    the script adds ``pilot/common`` to the path and imports the shared modules from there.
+    Each script is registered as ``<kit>_<name>``, so the kits' scripts of the same name
+    do not replace each other."""
+    module_name = f"{kit}_{name}"
+    if module_name in sys.modules:
+        return sys.modules[module_name]
+    spec = importlib.util.spec_from_file_location(module_name, ROOT / "pilot" / kit / f"{name}.py")
     module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
+    sys.modules[module_name] = module
     spec.loader.exec_module(module)
     return module
 
@@ -79,7 +82,7 @@ def setup_module() -> ModuleType:
 
 
 @pytest.fixture(scope="session")
-def export_module(setup_module) -> ModuleType:
+def export_module() -> ModuleType:
     return load_script("export_pilot")
 
 

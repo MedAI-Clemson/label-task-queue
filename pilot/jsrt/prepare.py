@@ -28,7 +28,7 @@ What it reads (folders you downloaded; nothing is fetched):
 
 What it writes in ``--out``:
 
-- ``png/<id>.png``: 8-bit greyscale, 1024 x 1024, the grid of the segmentations (see
+- ``png/<item>.png``: 8-bit greyscale, 1024 x 1024, the grid of the segmentations (see
   ``to_display`` for the downsampling and the grey-level window).
 - ``items.json``: the import file, a JSON list of items as ``POST .../datasets/{d}/items``
   takes them: ``item``, ``uri`` (a ``file://`` address in the server's media folder),
@@ -40,6 +40,12 @@ What it writes in ``--out``:
   as the ontology's own consensus check computes it, and how often it meets the threshold.
 
 Every key is validated with the ontology's label task before anything is written.
+
+**Item names hide the answer.** A JSRT file name gives the nodule answer (``JPCLN`` with a
+nodule, ``JPCNN`` without), and a labeler sees the item name. So each item is named
+``jsrt_`` plus the first ten hex digits of the SHA-256 of its ``.IMG`` file. The JSRT name
+is kept as the property ``source_id``, which labelers never see, and ``items.json`` lists
+the items in the order of the new names.
 """
 
 from __future__ import annotations
@@ -393,6 +399,11 @@ def _by_image(root: Path, suffixes: tuple[str, ...]) -> dict[str, Path]:
 # --- Keys and the observer report -----------------------------------------------------------
 
 
+def item_name(source_sha256: str) -> str:
+    """The item's name: opaque, so that it does not give the nodule answer away."""
+    return f"jsrt_{source_sha256[:10]}"
+
+
 def build_key(masks: dict[str, np.ndarray], nodule: str) -> dict[str, Any]:
     """A label in the ontology's format: the nodule answer and one RLE per structure."""
     return {
@@ -503,12 +514,14 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
 
         raw, clipped = read_jsrt_raw(images[image_id])
         pixels = to_display(raw, SIDE, not args.no_invert, args.window, args.low_pct, args.high_pct)
-        png = png_dir / f"{image_id}.png"
+        source_sha256 = hashlib.sha256(images[image_id].read_bytes()).hexdigest()
+        png = png_dir / f"{item_name(source_sha256)}.png"
         digest = write_png(pixels, png)
         properties |= record
         properties |= {
+            "source_id": image_id,
             "source_file": images[image_id].name,
-            "source_sha256": hashlib.sha256(images[image_id].read_bytes()).hexdigest(),
+            "source_sha256": source_sha256,
             "source_pixels_clipped": clipped,
             "gold_source": f"observer 1 of the SCR database ({first.source.split(' in ')[0]}); "
             "nodule from the JSRT clinical data",
@@ -517,7 +530,7 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
             properties["scr_fold"] = first.folds[image_id]
         items.append(
             {
-                "item": image_id,
+                "item": item_name(source_sha256),
                 "uri": (media_root / png.name).as_uri(),
                 "content_hash": digest,
                 "properties": properties,
@@ -526,6 +539,9 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
         if not args.quiet and count % 25 == 0:
             print(f"  {count} of {len(ids)} images done", file=sys.stderr)
 
+    if len({item["item"] for item in items}) != len(items):
+        raise PrepareError("Two images have the same content; is a file there twice?")
+    items.sort(key=lambda item: item["item"])  # the JSRT order puts every nodule case first
     args.out.mkdir(parents=True, exist_ok=True)
     (args.out / "items.json").write_text(json.dumps(items, indent=1) + "\n")
     report = observer_report(task, pairs)

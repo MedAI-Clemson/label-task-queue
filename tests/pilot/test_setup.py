@@ -135,7 +135,10 @@ def test_the_training_round_waits_for_trainees(
 
 def test_a_different_split_on_a_set_up_dataset_is_refused(setup_module, server, prepared, tmp_path):
     assert run_setup(setup_module, server, prepared, tmp_path)[0] == 0
-    status, _ = run_setup(setup_module, server, prepared, tmp_path, "--seed", "7")
+    items = json.loads((prepared / "items.json").read_text())
+    first, _ = setup_module.split_items(items, 2, seed=20261011)
+    other = next(s for s in range(100) if setup_module.split_items(items, 2, seed=s)[0] != first)
+    status, _ = run_setup(setup_module, server, prepared, tmp_path, "--seed", str(other))
     assert status == 1
 
 

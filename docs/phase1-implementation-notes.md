@@ -213,8 +213,8 @@ on `main` is `e77c9d0`. To tag it, run
     answer away, through their last digit and through their numbers (every normal image is
     numbered below every TB image), and the labeling page shows an item's name. So items
     are named `mc_` plus 10 hex digits of the source PNG's SHA-256, and are listed in that
-    order. The JSRT kit still uses its file names (`JPCLN…` with a nodule, `JPCNN…`
-    without): see the follow-ups.
+    order. The JSRT kit had the same leak (`JPCLN…` with a nodule, `JPCNN…` without). Its
+    items are now named `jsrt_` plus the hash of the `.IMG` file.
 39. **Decided (Hudson: "make up the accounts for now"): pilot accounts are made up and no
     password is in the repository.**
     - `accounts.example.csv` names fictional people.
@@ -261,8 +261,6 @@ A read-only review of the first merge found these, all now fixed:
 - The home page's "work waiting" count reads engine internals; it should get an engine
   read method.
 - Locating config problems by YAML line number. Today they are located by stage and key.
-- The JSRT pilot kit's item names (`JPCLN…`, `JPCNN…`) reveal the nodule answer to the
-  labeler. Rename them as the Montgomery kit does before using that kit for real.
 
 ## The design notes' open questions, answered in review (Oct 11, 2026)
 

@@ -25,8 +25,13 @@ def items(prepared: Path) -> list[dict]:
     return json.loads((prepared / "items.json").read_text())
 
 
-def test_every_image_becomes_an_item_with_its_png_and_hash(prepared, items, fake_jsrt):
-    assert [item["item"] for item in items] == fake_jsrt.ids
+@pytest.fixture(scope="module")
+def by_source(items: list[dict]) -> dict[str, dict]:
+    return {item["properties"]["source_id"]: item for item in items}
+
+
+def test_every_image_becomes_an_item_with_its_png_and_hash(prepared, items, by_source, fake_jsrt):
+    assert sorted(by_source) == fake_jsrt.ids
     for item in items:
         png = prepared / "png" / f"{item['item']}.png"
         assert item["uri"] == png.resolve().as_uri()
@@ -37,9 +42,20 @@ def test_every_image_becomes_an_item_with_its_png_and_hash(prepared, items, fake
             assert image.size == (1024, 1024)
 
 
-def test_the_png_is_downsampled_inverted_and_windowed(prepared, prepare_module, fake_jsrt):
+def test_item_names_do_not_give_the_nodule_answer_away(items, by_source, fake_jsrt):
+    for source_id, item in by_source.items():
+        source = fake_jsrt.jsrt / "images" / f"{source_id}.IMG"
+        digest = hashlib.sha256(source.read_bytes()).hexdigest()
+        assert item["item"] == f"jsrt_{digest[:10]}"
+        assert item["properties"]["source_sha256"] == digest
+        assert "JPC" not in item["item"] and "JPC" not in item["uri"]
+    # listed in the order of the opaque names, not the JSRT's (nodule cases first)
+    assert [i["item"] for i in items] == sorted(i["item"] for i in items)
+
+
+def test_the_png_is_downsampled_inverted_and_windowed(prepared, by_source, fake_jsrt):
     raw = fake_jsrt.raw(0).astype(np.float64)
-    with Image.open(prepared / "png" / "JPCLN001.png") as image:
+    with Image.open(prepared / "png" / f"{by_source['JPCLN001']['item']}.png") as image:
         pixels = np.asarray(image)
     # 2 x 2 block means of the inverted image, windowed at its 0.5 and 99.5 percentiles
     blocks = 4095 - raw.reshape(1024, 2, 1024, 2).mean(axis=(1, 3))
@@ -80,7 +96,7 @@ def test_the_gold_key_round_trips_to_the_observer_1_masks(items, fake_jsrt):
             assert mask["size"] == [1024, 1024]
             assert isinstance(mask["counts"], str)  # the compressed COCO form
             assert np.array_equal(rle.decode(mask), fake_jsrt.mask(name, observer=1))
-        nodule = "present" if item["item"].startswith("JPCLN") else "absent"
+        nodule = "present" if item["properties"]["source_id"].startswith("JPCLN") else "absent"
         assert key["classifications"] == {"nodule": nodule}
 
 
@@ -91,8 +107,8 @@ def test_every_key_is_a_valid_label_of_the_pilot_ontology(items):
         task.validate(item["properties"]["observer2_key"])
 
 
-def test_the_jsrt_data_are_plain_properties(items):
-    first = items[0]["properties"]
+def test_the_jsrt_data_are_plain_properties(by_source):
+    first = by_source["JPCLN001"]["properties"]
     assert first["nodule"] == "present"
     assert first["subtlety"] == 5
     assert first["nodule_size_mm"] == 15
@@ -104,7 +120,7 @@ def test_the_jsrt_data_are_plain_properties(items):
     assert first["source_file"] == "JPCLN001.IMG"
     assert first["source_pixels_clipped"] == 0
     assert "scr_fold" not in first  # the outline files say nothing about folds
-    last = items[-1]["properties"]
+    last = by_source["JPCNN002"]["properties"]
     assert (last["nodule"], last["age"], last["sex"]) == ("absent", 41, "female")
     assert "subtlety" not in last
 
@@ -170,16 +186,18 @@ def test_pointing_at_both_observers_at_once_is_refused(tmp_path, fake_jsrt, prep
 
 
 def test_mask_folders_give_the_same_keys_as_the_outlines(
-    tmp_path, fake_jsrt, prepare_module, items
+    tmp_path, fake_jsrt, prepare_module, by_source
 ):
     out = tmp_path / "out"
     argv = ["--jsrt", str(fake_jsrt.jsrt), "--scr-masks", str(fake_jsrt.masks1)]
     assert prepare_module.main([*argv, "--out", str(out), "--quiet", "--limit", "2"]) == 0
     from_masks = json.loads((out / "items.json").read_text())
     assert len(from_masks) == 2
-    for mine, theirs in zip(from_masks, items, strict=False):
+    from_masks.sort(key=lambda item: item["properties"]["source_id"])
+    for mine in from_masks:
+        theirs = by_source[mine["properties"]["source_id"]]
         assert mine["properties"]["gold_key"] == theirs["properties"]["gold_key"]
-        assert mine["content_hash"] == theirs["content_hash"]
+        assert (mine["item"], mine["content_hash"]) == (theirs["item"], theirs["content_hash"])
     assert [m["properties"]["scr_fold"] for m in from_masks] == [1, 2]  # from the folders
 
 

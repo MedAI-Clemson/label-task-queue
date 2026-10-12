@@ -3,10 +3,6 @@
 > The recommended pilot is now [`pilot/montgomery`](../montgomery/README.md): its data
 > download with no registration. This kit stays as the alternative: five structures
 > instead of two lungs, but the JSRT images need a registration whose password expires.
->
-> **Known leak:** JSRT file names give the nodule answer (`JPCLN` with a nodule, `JPCNN`
-> without), and the items keep those names, which the labeling page shows. Rename the items
-> before using this kit for real (the Montgomery kit names items by a hash for this reason).
 
 Milestone 8 runs the anchor project on a small real dataset: one training round and one
 main workflow. The data are the 247 JSRT radiographs. The gold standard is the SCR
@@ -76,7 +72,11 @@ python pilot/jsrt/prepare.py --jsrt data/jsrt --scr-points data/scr/points --out
 
 This takes about two minutes. `--help` lists the options. It writes:
 
-- `out/png/JPC*.png`: 1024 × 1024, 8-bit.
+- `out/png/jsrt_*.png`: 1024 × 1024, 8-bit.
+  - Items and PNGs are named `jsrt_` plus 10 hex digits of the SHA-256 of the `.IMG` file.
+    The JSRT names give the nodule answer away (`JPCLN` with a nodule, `JPCNN` without),
+    and the labeling page shows an item's name. The JSRT name is kept in the hidden
+    property `source_id`.
   - The 2048 × 2048 12-bit image is averaged over 2 × 2 blocks, so it lands on the
     masks' grid.
   - It is then inverted, because the stored values are high where the film is dark.
@@ -88,7 +88,7 @@ This takes about two minutes. `--help` lists the options. It writes:
   - `observer2_key`, if given;
   - the JSRT data: `nodule`, `subtlety`, `nodule_size_mm`, `nodule_x`, `nodule_y`,
     `malignancy`, `location`, `diagnosis`, `age`, `sex`;
-  - the source file and its hash.
+  - `source_id` (such as `JPCLN001`), the source file and its hash.
 
   Every key is validated against `jsrt_scr@1` first.
 - `out/observer_report.txt`: with `--scr-points2` or `--scr-masks2`, the IoU between the

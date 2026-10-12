@@ -326,6 +326,23 @@ The derived tables (slots, labels, final labels) are rebuilt from the log and co
 test suite, and on a deployment with
 `python -m labelflow.store.rebuild "$DATABASE_URI" --project <name> --verify-only`.
 
+## The pilot
+
+Milestone 8 runs the anchor project on real data. The recommended kit is
+[`pilot/montgomery/`](pilot/montgomery/README.md): the NLM's Montgomery County chest
+X-rays, 138 images. The download is open, with no registration. Each image has a mask of
+each lung and a TB label, which serve as the gold standard. The kit holds:
+
+- the ontology and the two workflows (a training round on 12 gold images, and the main
+  run);
+- scripts to prepare the data, set up a server and export everything for the audit;
+- made-up accounts.
+
+Its README starts with a quick start that runs end to end in a few minutes. The older
+[`pilot/jsrt/`](pilot/jsrt/README.md) kit is kept as an alternative: JSRT images with the
+SCR segmentations of five structures. The JSRT images need registration. Both kits share
+`pilot/common/`.
+
 ## Project layout
 
 | Path | What it holds |
@@ -336,6 +353,7 @@ test suite, and on a deployment with
 | `src/labelflow/api` | The web API (FastAPI): accounts and login, projects, roles, datasets, workflows, labeler and admin endpoints, exports. |
 | `src/labelflow/ui` | The browser interface: login, labeling with brush and polygon masks, review layers, admin pages. Server-rendered (Jinja2 + htmx). |
 | `examples/` | The runnable demo, the worked workflow files, and the chest X-ray ontology. |
+| `pilot/` | The pilot kits: `montgomery/` (recommended), `jsrt/`, and the code they share in `common/`. |
 | `schema/` | The published JSON Schema of the config (`python -m labelflow.engine.config.schema` regenerates it). |
 | `docs/` | The design notes and implementation notes. |
 
@@ -355,7 +373,9 @@ their resolved form and diagrams.
 ## Status
 
 This is the Phase 1 rewrite. The engine, the built-in label task, SQLite storage, edits,
-the API and the browser interface are done; the pilot on a real dataset is next.
+the API and the browser interface are done. The pilot kit for a real dataset
+([`pilot/montgomery`](pilot/montgomery/README.md)) is ready and has been dry-run on the real
+data with made-up accounts. The pilot itself, with real participants, is next.
 
 - [`docs/phase1-design-notes.md`](docs/phase1-design-notes.md): the design, and why.
 - [`docs/phase1-implementation-notes.md`](docs/phase1-implementation-notes.md): status by

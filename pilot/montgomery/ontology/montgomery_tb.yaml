@@ -1,0 +1,81 @@
+# The Montgomery pilot's label task: both lungs, as in the Montgomery County chest X-ray
+# set's manual masks, plus one yes/no question about tuberculosis. Workflows refer to it as
+# 'montgomery_tb@1'. Change the version if you change anything below.
+#
+# Images are shown with their longest side at 1024 pixels (prepare.py shrinks the 4020 x
+# 4892 originals by area averaging), so a mask is 841 x 1024 (portrait) or 1024 x 841
+# (landscape): 41 of the 138 images are landscape.
+
+name: montgomery_tb
+version: 1
+
+# 'tb_findings' is the one fact of the dataset a reader can judge from the image, and the
+# reason the set exists.
+#
+#   present = ANY radiographic sign of TB, active or old: infiltrates, cavities, effusion,
+#             miliary nodules, and also scars, fibrosis, volume loss and calcified granulomas.
+#   absent  = a normal film.
+#
+# This is decided (Hudson, Oct 11, 2026), and it matches the dataset's own label, which comes
+# from the file name: '_1' is "manifestation of tuberculosis" and '_0' is "normal", from the
+# TB clinic's radiology readings. 24 of the 58 '_1' readings describe old, inactive or
+# treated disease, and their gold answer is 'present'. Readers are not asked whether the
+# disease is active. It is
+# compared exactly, so a double read with different answers goes to adjudication even when
+# the masks agree.
+#
+# Left out of the label, and kept as plain item properties instead (prepare.py), so they can
+# be joined to the exports without asking anyone to guess them: the clinical reading's text,
+# age and sex, and which images are of the same patient.
+classifications:
+  - name: tb_findings
+    values: [present, absent]
+    required: true
+
+# Thresholds: the IoU (intersection over union, the Jaccard index) at or above which two
+# masks agree.
+#
+# No second observer's masks exist for the Montgomery set, and no inter-observer study of
+# its lung outlines is published. The best human-human figure for lung fields on chest
+# radiographs is the SCR study (van Ginneken B, Stegmann MB, Loog M. Segmentation of
+# anatomical structures in chest radiographs using supervised methods: a comparative study
+# on a public database. Medical Image Analysis 10(1):19-40, 2006): a second observer
+# against the reference, over 247 JSRT images, overlap Omega = TP / (TP + FP + FN), which
+# is the IoU:
+#
+#   lungs   0.946 +- 0.018 (mean +- sd), median 0.949, min 0.822
+#
+# Its lung convention matches Montgomery's ("the part of the lung behind the heart is
+# excluded"; NLM ReadMe). For scale, the Montgomery set's own lung segmentation paper
+# (Candemir S, Jaeger S, Musco J, et al. Lung segmentation in chest radiographs using
+# anatomical atlases with nonrigid registration. IEEE TMI 33(2):577-590, 2014) reports
+# 0.941 overlap for its automatic method against these masks, so careful humans should do
+# at least as well.
+#
+# The threshold sits a little below human-human agreement, near the mean minus 1.65 sd,
+# so that about 95% of pairs of careful human reads would pass:
+#
+#   lungs   0.946 - 1.65 x 0.018 = 0.916  ->  0.90   (Dice 0.947)
+#
+# Rounded down, which also allows for drawing with a brush or polygon in a browser, and for
+# the TB images: where disease hides the lung edge the Montgomery annotators "draw an
+# inferred boundary", where readers will disagree more.
+#
+# Kept at 0.90 for the pilot (Hudson, Oct 11, 2026). After the pilot it will be revisited
+# from the measured agreement of our own double reads (the lung IoUs of the consensus checks
+# in montgomery_main). A new threshold is a new version of this label task: copy this file,
+# set 'version: 2', and point new workflows at montgomery_tb@2. Labels already recorded keep
+# the version they were checked under.
+#
+# 'left' and 'right' are the PATIENT's: the right lung is on the LEFT of the image. Note
+# that the dataset's own folders are named by image side: its 'leftMask' folder holds the
+# patient's right lung (prepare.py swaps them and checks every image).
+masks:
+  - name: right_lung
+    threshold: 0.90
+  - name: left_lung
+    threshold: 0.90
+
+# The most pixels a mask may have: one image at its display size, 1024 x 841 (the default
+# allows 64 million). A larger mask is refused at submit, before it is decoded.
+max_mask_pixels: 861184

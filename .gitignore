@@ -4,3 +4,12 @@ __pycache__/
 *.db
 db/
 .pytest_cache/
+
+# Pilot data and outputs: datasets may not be redistributed, and out/ holds generated
+# passwords (see pilot/*/README.md)
+/data/
+/out/
+/exports/
+pilot/*/data/
+pilot/*/out/
+pilot/*/exports/

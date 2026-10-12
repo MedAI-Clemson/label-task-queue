@@ -1,0 +1,10 @@
+username,display_name,roles
+trainee_one,Trainee One,trainee
+trainee_two,Trainee Two,trainee
+trainee_three,Trainee Three,trainee
+annotator_one,Annotator One,annotator
+annotator_two,Annotator Two,annotator
+annotator_three,Annotator Three,annotator
+expert_one,Expert One,expert
+expert_two,Expert Two,expert
+pilot_admin,Pilot Admin,admin

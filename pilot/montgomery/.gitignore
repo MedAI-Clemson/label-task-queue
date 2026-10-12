@@ -1,0 +1,9 @@
+# Data and outputs stay out of the repository: the NLM asks that the Montgomery set is not
+# shared outside the research group, and out/ holds generated passwords.
+data/
+out/
+exports/
+MontgomerySet/
+NLM-MontgomeryCXRSet.zip
+*.png
+credentials.csv

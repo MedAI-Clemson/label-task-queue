@@ -1,0 +1,28 @@
+# Montgomery pilot, workflow 1 of 2: the training round.
+#
+# Every trainee labels every image of a small gold set (12 of the 138 images, chosen by
+# setup_pilot.py with a seeded draw stratified on the TB answer: 5 with TB findings and 7
+# normal), and each label is scored against the image's 'gold_key': the dataset's two lung
+# masks plus its TB answer. The score report then gives each trainee's fraction of labels
+# that agree with the key under the ontology's thresholds; the labels export holds every
+# label for a closer look. 12 images keeps the round to about an hour per trainee.
+#
+# Start it only after the trainees hold the 'trainee' role: 'labels_per_item: all' means
+# everyone holding the role *when the image is admitted*, and every image is admitted at
+# the start. setup_pilot.py refuses to start it while nobody holds the role.
+
+workflow: montgomery_training_1
+dataset: montgomery_gold          # 12 images, each with a 'gold_key' property
+label_task: montgomery_tb@1       # pilot/montgomery/ontology/montgomery_tb.yaml
+
+stages:
+  - name: gold_read
+    assign_to: trainee
+    labels_per_item: all          # every trainee labels every gold image; the list of
+                                  # trainees is logged at admission
+    score_against: gold_key       # each label against the key, by the same consensus rule;
+                                  # changes no routing, and trainees never see the key
+    show_prior: false             # nothing earlier to show in a one-stage workflow; written
+                                  # out so the export states plainly that reads were blind
+
+final: none                       # training produces scores, not final labels

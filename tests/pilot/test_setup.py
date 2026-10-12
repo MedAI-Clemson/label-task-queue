@@ -1,25 +1,14 @@
-"""setup_pilot.py and export_pilot.py against a real server: the app from ``create_app``
-on a migrated temporary database, served by uvicorn in a thread, so the scripts' own HTTP
-code (urllib) is what runs."""
+"""setup_pilot.py and export_pilot.py against a real server (``serve_pilot`` in the
+conftest), so the scripts' own HTTP code (urllib) is what runs."""
 
 from __future__ import annotations
 
 import csv
 import json
-import socket
 import stat
-import threading
-import time
-from collections.abc import Iterator
-from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
-import uvicorn
-from alembic import command
-from alembic.config import Config
-
-from labelflow.api import Settings, create_app
 
 pytest.importorskip("PIL", reason="the pilot kit needs Pillow: pip install -e '.[pilot]'")
 
@@ -27,47 +16,11 @@ ROOT = Path(__file__).resolve().parents[2]
 ADMIN_PASSWORD = "admin-password-for-tests"
 
 
-@dataclass
-class Server:
-    url: str
-    app: object
-
-
 @pytest.fixture
-def server(tmp_path: Path, prepared: Path) -> Iterator[Server]:
-    database = tmp_path / "labelflow.db"
-    config = Config(str(ROOT / "alembic.ini"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{database}")
-    config.attributes["configure_logger"] = False
-    command.upgrade(config, "head")
-    settings = Settings(
-        database_uri=f"sqlite:///{database}",
-        label_tasks=ROOT / "pilot" / "jsrt" / "ontology",  # the pilot's ontology folder as is
-        media_root=prepared / "png",
-        sqlite_synchronous="OFF",
-        password_cost=4,
-    )
-    app = create_app(settings)
-    runtime = app.state.runtime
-    runtime.ready()
-    runtime.accounts.create("root", ADMIN_PASSWORD, "Root", is_admin=True)
-
-    sock = socket.socket()
-    sock.bind(("127.0.0.1", 0))
-    port = sock.getsockname()[1]
-    uv = uvicorn.Server(uvicorn.Config(app, log_level="warning", lifespan="on"))
-    thread = threading.Thread(target=uv.run, kwargs={"sockets": [sock]}, daemon=True)
-    thread.start()
-    deadline = time.monotonic() + 10
-    while not uv.started:
-        assert time.monotonic() < deadline, "the server did not start"
-        time.sleep(0.02)
-    try:
-        yield Server(f"http://127.0.0.1:{port}", app)
-    finally:
-        uv.should_exit = True
-        thread.join(10)
-        sock.close()
+def server(tmp_path: Path, prepared: Path, serve_pilot):
+    ontology = ROOT / "pilot" / "jsrt" / "ontology"
+    with serve_pilot(tmp_path / "labelflow.db", ontology, prepared / "png") as running:
+        yield running
 
 
 @pytest.fixture
@@ -90,7 +43,7 @@ def read_csv(path: Path) -> list[dict[str, str]]:
         return list(csv.DictReader(handle))
 
 
-def run_setup(setup_module, server: Server, prepared: Path, tmp_path: Path, *extra: str):
+def run_setup(setup_module, server, prepared: Path, tmp_path: Path, *extra: str):
     said: list[str] = []
     argv = ["--server", server.url, "--admin", "root", "--items", str(prepared / "items.json")]
     argv += ["--gold", "2", "--credentials", str(tmp_path / "credentials.csv"), *extra]
@@ -98,13 +51,13 @@ def run_setup(setup_module, server: Server, prepared: Path, tmp_path: Path, *ext
     return status, "\n".join(said)
 
 
-def admin_api(setup_module, server: Server):
+def admin_api(setup_module, server):
     api = setup_module.Api(server.url)
     api.token = api.post("/auth/login", {"username": "root", "password": ADMIN_PASSWORD})["token"]
     return api
 
 
-def login(setup_module, server: Server, user: str, password: str):
+def login(setup_module, server, user: str, password: str):
     api = setup_module.Api(server.url)
     api.token = api.post("/auth/login", {"username": user, "password": password})["token"]
     return api

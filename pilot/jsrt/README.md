@@ -1,4 +1,12 @@
-# Phase 1 pilot: JSRT chest X-rays with the SCR segmentations
+# Phase 1 pilot, alternative kit: JSRT chest X-rays with the SCR segmentations
+
+> The recommended pilot is now [`pilot/montgomery`](../montgomery/README.md): its data
+> download with no registration. This kit stays as the alternative: five structures
+> instead of two lungs, but the JSRT images need a registration whose password expires.
+>
+> **Known leak:** JSRT file names give the nodule answer (`JPCLN` with a nodule, `JPCNN`
+> without), and the items keep those names, which the labeling page shows. Rename the items
+> before using this kit for real (the Montgomery kit names items by a hash for this reason).
 
 Milestone 8 runs the anchor project on a small real dataset: one training round and one
 main workflow. The data are the 247 JSRT radiographs. The gold standard is the SCR
@@ -12,6 +20,10 @@ reference segmentation of five structures: both lungs, the heart and both clavic
 | `prepare.py` | Converts the downloads into PNGs, gold keys and the import file `items.json`. |
 | `setup_pilot.py` | Sets up the project, roles, accounts, datasets and items on a running server, and starts both workflows. |
 | `export_pilot.py` | Downloads everything the audit needs at the end. |
+
+`setup_pilot.py` and `export_pilot.py` are thin: the steps are shared with the Montgomery
+kit, in `pilot/common/` (`kit_setup.py`, `kit_export.py`, and `kit_prepare.py` for pieces
+of `prepare.py`).
 
 ## 1. Get the data (once, by hand)
 
@@ -118,7 +130,9 @@ python pilot/jsrt/setup_pilot.py --server http://localhost:8000 --admin root \
 The script then does the following:
 
 - It creates the project `jsrt_pilot`, the roles `trainee`, `annotator` and `expert`, and
-  the accounts. Generated passwords go to `pilot_credentials.csv`, readable only by you.
+  the accounts. Generated passwords go to `pilot/jsrt/out/credentials.csv` (git-ignored,
+  readable only by you; `--credentials` to change it). A role `admin` in the CSV makes a
+  server administrator instead of granting a project role.
 - It grants the roles, giving a reason for each.
 - It splits the images with `--seed` (default 20261011): 20 go to `jsrt_gold`, 12 with a
   nodule and 8 without, and the other 227 go to `jsrt_main`.

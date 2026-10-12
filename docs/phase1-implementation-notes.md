@@ -21,7 +21,7 @@ usually a small, local change.
 | 5 | Versioning and edits | Done | `src/labelflow/engine/edits.py` |
 | 6 | API | Done (Docker image not built in CI) | `src/labelflow/api/` |
 | 7 | Interface | Done; browser-tested end to end (see [`ui/README.md`](ui/README.md)) | `src/labelflow/ui/` |
-| 8 | Pilot | Not started | |
+| 8 | Pilot | Kit ready and dry-run on the real data with made-up accounts; the pilot with real participants not started | `pilot/montgomery/` (recommended), `pilot/jsrt/` (alternative), `pilot/common/` |
 
 **The prototype tag.** The prototype was removed on the Phase 1 branch. Its last commit
 on `main` is `e77c9d0`. To tag it, run
@@ -186,6 +186,44 @@ on `main` is `e77c9d0`. To tag it, run
     rubber-stamp. "Clear all" after a start keeps `started_from` (the reviewer did start from
     it); undoing the start removes it.
 
+### The pilot (milestone 8)
+
+35. **Proposed: the pilot runs on the Montgomery County chest X-ray set** (`pilot/montgomery`).
+    It replaces JSRT, whose download needs a registration with an expiring password; the
+    JSRT kit stays as an alternative.
+    - The Montgomery set comes from the NLM, as a single 617 MB zip with no login.
+    - It has 138 de-identified 2D radiographs, with a mask of each lung and a TB label each.
+    - The terms allow research use and local hosting. They ask that the data not be shared
+      outside the research group, and that two papers be cited.
+
+    The Shenzhen set and Kvasir-SEG were the fallbacks. Neither was needed. The Shenzhen
+    set has 662 images; the NLM gives it outlines of the abnormalities on the TB images,
+    but no lung masks. Kvasir-SEG has no classification.
+36. **Proposed: the classification is `tb_findings: present | absent`**, with the gold answer
+    from the dataset's file name. `present` means any radiographic sign of TB, active or
+    old: 24 of the 58 TB readings describe inactive or healed disease, or have no report.
+    Asking about *active* TB instead would need a radiologist's re-read for the gold.
+37. **Proposed: lung masks agree at IoU 0.90.** The dataset has a single observer, and I
+    found no published inter-observer study of its masks. The threshold sits near the mean
+    minus 1.65 sd of the SCR study's human-observer lung overlap (0.946 ± 0.018). It is to
+    be revisited with the pilot's double reads.
+38. **Decided (by the data): items get opaque names.** Montgomery's file names give the TB
+    answer away, through their last digit and through their numbers (every normal image is
+    numbered below every TB image), and the labeling page shows an item's name. So items
+    are named `mc_` plus 10 hex digits of the source PNG's SHA-256, and are listed in that
+    order. The JSRT kit still uses its file names (`JPCLN…` with a nodule, `JPCNN…`
+    without): see the follow-ups.
+39. **Decided (Hudson: "make up the accounts for now"): pilot accounts are made up and no
+    password is in the repository.**
+    - `accounts.example.csv` names fictional people.
+    - `setup_pilot.py` generates every password and appends them to `<kit>/out/credentials.csv`.
+      That file is git-ignored and has mode 0600. The script prints a warning to hand the
+      passwords out privately.
+    - The role `admin` in the CSV makes a server administrator.
+40. **Proposed: the gold set has 12 images, stratified on the TB answer (5 and 7).** The main
+    set has the other 126. Images of the same patient are not kept together; this affects
+    3 patients.
+
 ## Hardening after review (Oct 11, 2026)
 
 A read-only review of the first merge found these, all now fixed:
@@ -215,6 +253,8 @@ A read-only review of the first merge found these, all now fixed:
 - The home page's "work waiting" count reads engine internals; it should get an engine
   read method.
 - Locating config problems by YAML line number. Today they are located by stage and key.
+- The JSRT pilot kit's item names (`JPCLN…`, `JPCNN…`) reveal the nodule answer to the
+  labeler. Rename them as the Montgomery kit does before using that kit for real.
 
 ## The design notes' open questions, answered in review (Oct 11, 2026)
 

@@ -14,6 +14,7 @@ MONTGOMERY = Kit(
     project="montgomery_pilot",
     stratify_by="tb_findings",
     gold=12,
+    linked_by="same_patient_as",  # prepare.py's item names of the patient's other images
 )
 
 JSRT = Kit(

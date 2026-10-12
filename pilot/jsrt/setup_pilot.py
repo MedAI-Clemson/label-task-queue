@@ -22,7 +22,7 @@ import kit_setup
 from kit_setup import Api, SetupError, read_accounts
 from kits import JSRT as KIT
 
-split_items = partial(kit_setup.split_items, stratify_by=KIT.stratify_by)
+split_items = partial(kit_setup.split_items, stratify_by=KIT.stratify_by, linked_by=KIT.linked_by)
 
 __all__ = ["KIT", "Api", "SetupError", "main", "read_accounts", "split_items"]
 

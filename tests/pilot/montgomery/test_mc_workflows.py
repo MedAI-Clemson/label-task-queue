@@ -103,3 +103,47 @@ def test_the_example_accounts(mc_setup):
     with path.open(newline="") as handle:
         assert "password" not in next(csv.reader(handle))
     assert all(p["password"] == "" for p in people)
+
+
+def test_the_split_keeps_each_patients_images_on_one_side(mc_setup):
+    # 58 TB and 80 normal images, as in the dataset; some TB patients have 2 or 3 images,
+    # linked as prepare.py links them (one way only, and through chains)
+    answers = ["present"] * 58 + ["absent"] * 80
+    items = [
+        {"item": f"mc_{i:010x}", "properties": {"tb_findings": a, "same_patient_as": []}}
+        for i, a in enumerate(answers)
+    ]
+    patients = [[0, 1], [2, 3, 4], [5, 6], [7, 8, 9], [10, 11]]
+    for _first, *others in patients:
+        for other in others:  # each later image names the one before it
+            items[other]["properties"]["same_patient_as"] = [items[other - 1]["item"]]
+    assert {len(u) for u in mc_setup.kit_setup.patient_units(items, "same_patient_as")} == {
+        1,
+        2,
+        3,
+    }
+    for seed in range(40):
+        gold, main = mc_setup.split_items(items, 12, seed=seed)
+        assert len(gold) == 12 and len(main) == 126
+        assert sum(i["properties"]["tb_findings"] == "present" for i in gold) == 5
+        in_gold = {i["item"] for i in gold}
+        for patient in patients:
+            sides = {items[n]["item"] in in_gold for n in patient}
+            assert len(sides) == 1, (seed, patient)
+        assert mc_setup.split_items(items, 12, seed=seed) == (gold, main)
+    # the seeds draw patients with several images into the gold set too, whole
+    drawn = set()
+    for seed in range(40):
+        in_gold = {i["item"] for i in mc_setup.split_items(items, 12, seed=seed)[0]}
+        drawn |= {tuple(p) for p in patients if items[p[0]]["item"] in in_gold}
+    assert drawn
+
+
+def test_a_split_with_no_links_is_the_plain_stratified_draw(mc_setup):
+    items = [
+        {"item": f"mc_{i:010x}", "properties": {"tb_findings": "present" if i % 3 else "absent"}}
+        for i in range(30)
+    ]
+    linked = mc_setup.split_items(items, 9, seed=5)
+    plain = mc_setup.kit_setup.split_items(items, 9, 5, "tb_findings")
+    assert linked == plain

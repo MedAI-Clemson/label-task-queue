@@ -65,7 +65,11 @@ def test_setup_with_the_example_accounts_then_label_and_export(
     gold = admin.get(f"{BASE}/datasets/montgomery_gold/items")["rows"]
     main = admin.get(f"{BASE}/datasets/montgomery_main/items")["rows"]
     assert len(gold) == 2 and len(main) == 2
-    assert sorted(i["properties"]["tb_findings"] for i in gold) == ["absent", "present"]
+    # The two TB images are of one patient (the reading says so), and the patient's images
+    # stay together: they do not fit the gold set's one TB place, so both go to the main set
+    # and the gold set takes the two normal images.
+    assert sorted(i["properties"]["tb_findings"] for i in gold) == ["absent", "absent"]
+    assert sorted(i["properties"]["source_id"] for i in main) == ["MCUCXR_0104_1", "MCUCXR_0117_1"]
     progress = admin.get(f"{BASE}/workflows/montgomery_training_1")["progress"]
     assert progress["items"]["entered"] == 2
     assert progress["stages"][0]["open"] == 2 * 3  # every trainee, every gold image

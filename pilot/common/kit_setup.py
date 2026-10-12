@@ -14,8 +14,9 @@ already done, so the script can be run again:
    only), with a warning to hand them out privately;
 4. split the items of ``items.json`` (from the kit's ``prepare.py``) into the gold set
    (``--gold`` images, chosen by a hashed draw with ``--seed``, in proportion to the groups
-   of the kit's stratifying property) and the main set (the rest), create the two datasets
-   named by the workflow files, and import the items in batches;
+   of the kit's stratifying property, keeping each patient's images together) and the main
+   set (the rest), create the two datasets named by the workflow files, and import the
+   items in batches;
 5. check both workflow files and start them with ``--seed``. The training round starts only
    once someone holds ``trainee``, since it gives every image to the trainees who hold the
    role when the workflow starts.
@@ -57,6 +58,7 @@ class Kit:
     project: str  # the default project name
     stratify_by: str  # the item property the gold set is stratified on
     gold: int  # the default size of the gold set
+    linked_by: str | None = None  # the item property listing other images of the same patient
 
     @property
     def path(self) -> str:
@@ -182,32 +184,86 @@ def read_accounts(path: Path) -> list[dict[str, Any]]:
 
 
 def split_items(
-    items: list[dict[str, Any]], gold: int, seed: int, stratify_by: str
+    items: list[dict[str, Any]],
+    gold: int,
+    seed: int,
+    stratify_by: str,
+    linked_by: str | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """The gold set and the main set. Items are grouped by their ``stratify_by`` property;
-    within each group they are ordered by ``sha256(seed:item)``, each group gives the gold
-    set its share of ``gold`` images (largest remainders), and the rest go to the main set.
-    The same items and seed always give the same split."""
+    """The gold set and the main set, with the images of one patient always on the same side.
+
+    1. Items are joined into units: with ``linked_by``, the property listing the other items
+       of the same patient (links are followed both ways and through chains); otherwise each
+       item is its own unit.
+    2. Each stratum (the value of ``stratify_by``; a unit whose items disagree forms a
+       stratum of its own) gets its share of ``gold`` images, in proportion to its images,
+       rounded by largest remainders.
+    3. Within a stratum the units are ordered by ``sha256(seed:first item)`` and taken in that
+       order, skipping a unit that would overshoot the stratum's share. If that leaves the
+       gold set short, the skipped units are tried again in the same order, across strata.
+
+    Every other unit goes to the main set. The same items and seed always give the same split,
+    and with no links it is the plain stratified draw.
+    """
     if not 0 <= gold <= len(items):
         raise SetupError(f"--gold must be between 0 and {len(items)}, the number of items.")
+    units = patient_units(items, linked_by)
 
-    def rank(item: dict[str, Any]) -> str:
-        return hashlib.sha256(f"{seed}:{item['item']}".encode()).hexdigest()
+    def rank(unit: list[dict[str, Any]]) -> str:
+        return hashlib.sha256(f"{seed}:{unit[0]['item']}".encode()).hexdigest()
 
-    groups: dict[str, list[dict[str, Any]]] = {}
-    for item in items:
-        groups.setdefault(str(item["properties"].get(stratify_by)), []).append(item)
-    shares = {name: gold * len(group) / len(items) for name, group in groups.items()}
+    def stratum(unit: list[dict[str, Any]]) -> str:
+        values = {str(item["properties"].get(stratify_by)) for item in unit}
+        return values.pop() if len(values) == 1 else "mixed: " + ", ".join(sorted(values))
+
+    strata: dict[str, list[list[dict[str, Any]]]] = {}
+    for unit in sorted(units, key=rank):
+        strata.setdefault(stratum(unit), []).append(unit)
+    sizes = {name: sum(len(unit) for unit in group) for name, group in strata.items()}
+    shares = {name: gold * size / len(items) for name, size in sizes.items()}
     counts = {name: int(share) for name, share in shares.items()}
     by_remainder = sorted(shares, key=lambda name: (counts[name] - shares[name], name))
     for name in by_remainder[: gold - sum(counts.values())]:
         counts[name] += 1
-    chosen = set()
-    for name, group in groups.items():
-        chosen |= {item["item"] for item in sorted(group, key=rank)[: counts[name]]}
+
+    chosen: set[str] = set()
+    skipped: list[list[dict[str, Any]]] = []
+    for name, group in strata.items():
+        room = counts[name]
+        for unit in group:
+            if len(unit) <= room:
+                chosen |= {item["item"] for item in unit}
+                room -= len(unit)
+            else:
+                skipped.append(unit)
+    for unit in sorted(skipped, key=rank):
+        if len(chosen) + len(unit) <= gold:
+            chosen |= {item["item"] for item in unit}
     gold_set = [item for item in items if item["item"] in chosen]
     main_set = [item for item in items if item["item"] not in chosen]
     return gold_set, main_set
+
+
+def patient_units(items: list[dict[str, Any]], linked_by: str | None) -> list[list[dict[str, Any]]]:
+    """The items joined into one list per patient, each in the items' order. Links to items
+    that are not in ``items`` are ignored."""
+    parent = {item["item"]: item["item"] for item in items}
+
+    def root(name: str) -> str:
+        while parent[name] != name:
+            parent[name] = parent[parent[name]]
+            name = parent[name]
+        return name
+
+    if linked_by:
+        for item in items:
+            for other in item["properties"].get(linked_by) or []:
+                if other in parent:
+                    parent[root(other)] = root(item["item"])
+    units: dict[str, list[dict[str, Any]]] = {}
+    for item in items:
+        units.setdefault(root(item["item"]), []).append(item)
+    return list(units.values())
 
 
 def workflow_file(path: Path) -> tuple[str, str, str]:
@@ -239,7 +295,9 @@ def setup(
         make_accounts(kit, args, api, base, say)
 
     items = json.loads(args.items.read_text(encoding="utf-8"))
-    gold_items, main_items = split_items(items, args.gold, args.seed, kit.stratify_by)
+    gold_items, main_items = split_items(
+        items, args.gold, args.seed, kit.stratify_by, kit.linked_by
+    )
     files = [workflow_file(path) for path in args.workflows]
     datasets = [files[0][2], files[1][2]]
     for dataset, chosen in zip(datasets, (gold_items, main_items), strict=True):
